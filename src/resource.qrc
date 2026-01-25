@@ -1,0 +1,18 @@
+<RCC>
+    <qresource prefix="/">
+        <file alias="style.qss">theme/style.qss</file>
+        <file alias="keywords.txt">editor/keywords.txt</file>
+        <file alias="images/testcase.svg">images/testcase.svg</file>
+        <file alias="images/battle.svg">images/battle.svg</file>
+        <file alias="images/train.svg">images/train.svg</file>
+        <file alias="images/settings.svg">images/settings.svg</file>
+        <file alias="images/arrow-left.svg">images/arrow-left.svg</file>
+        <file alias="images/play.svg">images/play.svg</file>
+        <file alias="images/plus.svg">images/plus.svg</file>
+        <file alias="images/trash.svg">images/trash.svg</file>
+        <file alias="images/file.svg">images/file.svg</file>
+        <file alias="images/window-minimize.svg">images/window-minimize.svg</file>
+        <file alias="images/window-maximize.svg">images/window-maximize.svg</file>
+        <file alias="images/window-close.svg">images/window-close.svg</file>
+    </qresource>
+</RCC>

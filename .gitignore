@@ -1,0 +1,43 @@
+# Build outputs
+*.o
+*.obj
+*.a
+*.so
+*.dylib
+*.dll
+*.exe
+*.out
+*.app
+*.dSYM/
+
+# Dependency files and profiling artifacts
+*.d
+*.gcda
+*.gcno
+*.gcov
+*.profraw
+*.profdata
+
+# CMake-generated files
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+compile_commands.json
+
+# Ninja-generated files
+*.ninja
+*.ninja_deps
+*.ninja_log
+
+# Common build directories
+build/
+build-*/
+out/
+cmake-build*/
+
+# IDE/editor folders
+.vscode/
+.idea/
+
+# Qt/Qt Creator + other tooling artifacts
+.cph/
