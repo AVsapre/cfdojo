@@ -1,12 +1,12 @@
 #include "editor/EditorConfigurator.h"
 #include "editor/DojoCppLexer.h"
-#include "editor/EditorPlaceholder.h"
 #include "theme/ThemeManager.h"
 
 #include <QApplication>
 #include <QFile>
 #include <QFont>
 #include <QGridLayout>
+#include <QStringConverter>
 #include <QTextStream>
 #include <QVBoxLayout>
 #include <Qsci/qsciapis.h>
@@ -41,10 +41,6 @@ EditorConfigurator::EditorWidgets EditorConfigurator::build(QWidget *parent,
     overlayLayout->setContentsMargins(0, 0, 0, 0);
     overlayLayout->setSpacing(0);
     overlayLayout->addWidget(editor_, 0, 0);
-
-    // Create placeholder using the new widget
-    placeholder_ = new EditorPlaceholder(editor_, "Write your solution here...");
-    placeholder_->setFont(baseFont_);
 
     layout->addWidget(overlay);
 
@@ -83,6 +79,13 @@ void EditorConfigurator::setupEditor(const ThemeManager &theme) {
     editor_->setExtraAscent(2);
     editor_->setExtraDescent(2);
 
+    // Indentation and tab behavior
+    editor_->setTabWidth(4);
+    editor_->setIndentationWidth(4);
+    editor_->setIndentationsUseTabs(true);
+    editor_->setTabIndents(true);
+    editor_->setBackspaceUnindents(true);
+
     // Reset scroll width on text change
     connect(editor_, &QsciScintilla::textChanged, this, &EditorConfigurator::resetScrollWidth);
 }
@@ -112,6 +115,7 @@ void EditorConfigurator::setupAutoComplete() {
     QFile apiFile(":/keywords.txt");
     if (apiFile.open(QIODevice::ReadOnly | QIODevice::Text)) {
         QTextStream in(&apiFile);
+        in.setEncoding(QStringConverter::Utf8);
         while (!in.atEnd()) {
             const QString line = in.readLine().trimmed();
             if (!line.isEmpty()) {
@@ -251,12 +255,6 @@ void EditorConfigurator::applyZoom(double scale) {
     editor_->setMarginsFont(scaledFont);
     lexer_->setDefaultFont(scaledFont);
     lexer_->setFont(scaledFont);
-
-    if (placeholder_) {
-        placeholder_->setFont(scaledFont);
-        placeholder_->adjustSize();
-        placeholder_->updatePosition();
-    }
     
     updateMarginWidth();
 }

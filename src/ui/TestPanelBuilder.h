@@ -2,6 +2,7 @@
 
 #include <QString>
 #include <QPointer>
+#include <QColor>
 #include <vector>
 
 class QLabel;
@@ -33,11 +34,13 @@ public:
         QWidget *panel = nullptr;
         QWidget *casesContainer = nullptr;
         QVBoxLayout *casesLayout = nullptr;
+        QLabel *summaryLabel = nullptr;
+        QPushButton *runAllButton = nullptr;
         QPushButton *addButton = nullptr;
         QPushButton *clearCasesButton = nullptr;
     };
 
-    PanelWidgets build(QWidget *parent, QObject *context);
+    PanelWidgets build(QWidget *parent, QObject *context, const QColor &iconColor);
     CaseWidgets createCase(QWidget *parent, QObject *context, int index);
     void refreshEditorSizing();
 
@@ -52,4 +55,5 @@ private:
                                 int maxLines);
 
     std::vector<QPointer<AutoResizingTextEdit>> editors_;
+    QColor iconColor_ = QColor("#d4d4d4");
 };

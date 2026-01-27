@@ -2,6 +2,10 @@
 
 #include <QObject>
 #include <QProcess>
+#include <QTemporaryDir>
+#include <QElapsedTimer>
+#include <QColor>
+#include <memory>
 
 class QLabel;
 class QPlainTextEdit;
@@ -9,6 +13,7 @@ class QPushButton;
 class QSplitter;
 class QsciScintilla;
 class QWidget;
+class QTimer;
 
 class ExecutionController : public QObject {
     Q_OBJECT
@@ -36,11 +41,23 @@ public:
     };
 
     explicit ExecutionController(QObject *parent = nullptr);
+    ~ExecutionController();
     
     void bind(const UiBindings &bindings);
     void runWithBindings(const UiBindings &bindings);
+    void stop();
+    void setIconTintColor(const QColor &color);
+    
+    // Set template for transclusion (//#main is replaced with solution code)
+    void setTemplate(const QString &tmpl) { template_ = tmpl; }
+    QString getTemplate() const { return template_; }
+    void setTimeoutMs(int ms) { timeoutMs_ = ms; }
+    
+    // Apply transclusion: replace //#main with solution code
+    QString applyTransclusion(const QString &solution) const;
     
     State state() const { return state_; }
+    qint64 lastExecutionTimeMs() const { return lastExecutionTimeMs_; }
 
 signals:
     void stateChanged(State newState);
@@ -55,8 +72,10 @@ private slots:
 
 private:
     void setState(State newState);
+    void updateRunButtonForState(State newState);
     void startCompilation();
     void startExecution();
+    void cleanupTempDir();
     void updateStatus(const QString &status);
     void updateOutputPanels(bool showOutput, bool showError);
     void clearOutputs();
@@ -64,6 +83,15 @@ private:
 
     UiBindings ui_;
     State state_ = State::Idle;
+    QString template_ = "//#main";  // Default template (just transcludes solution)
     QProcess *compilerProcess_;
     QProcess *runProcess_;
+    std::unique_ptr<QTemporaryDir> tempDir_;
+    bool stopRequested_ = false;
+    QElapsedTimer runTimer_;
+    qint64 lastExecutionTimeMs_ = -1;
+    QTimer *timeoutTimer_ = nullptr;
+    int timeoutMs_ = 5000;
+    bool timedOut_ = false;
+    QColor iconColor_ = QColor("#d4d4d4");
 };

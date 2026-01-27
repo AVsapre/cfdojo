@@ -12,8 +12,8 @@ constexpr int kActivityIconSize = 32;
 ActivityBarButton::ActivityBarButton(const QString &iconPath, QWidget *parent)
     : QPushButton(parent),
       iconPath_(iconPath),
-      normalColor_("#ffffff"),
-      hoveredColor_("#ffffff"),
+      normalColor_("#d4d4d4"),
+      hoveredColor_("#d4d4d4"),
       inactiveColor_("#808080") {
     setFocusPolicy(Qt::NoFocus);
     setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
@@ -25,8 +25,8 @@ ActivityBarButton::ActivityBarButton(const QString &iconPath, QWidget *parent)
 void ActivityBarButton::setActiveState(bool active) {
     if (active_ != active) {
         active_ = active;
-        updateIcon();
     }
+    updateIcon();
 }
 
 void ActivityBarButton::setTintColors(const QColor &normal, const QColor &hovered, 

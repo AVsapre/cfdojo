@@ -8,7 +8,6 @@ class QsciScintilla;
 class QsciLexerCPP;
 class QsciAPIs;
 class ThemeManager;
-class EditorPlaceholder;
 
 class EditorConfigurator : public QObject {
     Q_OBJECT
@@ -35,7 +34,6 @@ private:
     void resetScrollWidth();
 
     QsciScintilla *editor_ = nullptr;
-    EditorPlaceholder *placeholder_ = nullptr;
     QsciLexerCPP *lexer_ = nullptr;
     QsciAPIs *apis_ = nullptr;
     QFont baseFont_;

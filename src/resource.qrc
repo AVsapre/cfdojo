@@ -7,10 +7,14 @@
         <file alias="images/train.svg">images/train.svg</file>
         <file alias="images/settings.svg">images/settings.svg</file>
         <file alias="images/arrow-left.svg">images/arrow-left.svg</file>
+        
         <file alias="images/play.svg">images/play.svg</file>
         <file alias="images/plus.svg">images/plus.svg</file>
         <file alias="images/trash.svg">images/trash.svg</file>
         <file alias="images/file.svg">images/file.svg</file>
+        <file alias="images/copy.svg">images/copy.svg</file>
+        <file alias="images/stresstest.svg">images/stresstest.svg</file>
+        <file alias="images/template.svg">images/template.svg</file>
         <file alias="images/window-minimize.svg">images/window-minimize.svg</file>
         <file alias="images/window-maximize.svg">images/window-maximize.svg</file>
         <file alias="images/window-close.svg">images/window-close.svg</file>

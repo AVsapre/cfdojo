@@ -1,10 +1,12 @@
 #include "ui/TestPanelBuilder.h"
 #include "ui/AutoResizingTextEdit.h"
+#include "ui/IconUtils.h"
 
 #include <QApplication>
 #include <QHBoxLayout>
 #include <QIcon>
 #include <QLabel>
+#include <QPointer>
 #include <QPushButton>
 #include <QScrollArea>
 #include <QSize>
@@ -23,9 +25,12 @@ public:
 
 } // namespace
 
-TestPanelBuilder::PanelWidgets TestPanelBuilder::build(QWidget *parent, QObject * /*context*/) {
+TestPanelBuilder::PanelWidgets TestPanelBuilder::build(QWidget *parent,
+                                                       QObject * /*context*/,
+                                                       const QColor &iconColor) {
     PanelWidgets widgets;
     editors_.clear();
+    iconColor_ = iconColor;
 
     // Main panel
     QWidget *panel = new QWidget(parent);
@@ -33,16 +38,18 @@ TestPanelBuilder::PanelWidgets TestPanelBuilder::build(QWidget *parent, QObject 
     panel->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Ignored);
     
     QVBoxLayout *layout = new QVBoxLayout(panel);
-    layout->setContentsMargins(0, 0, 0, 0);
-    layout->setSpacing(8);
+    layout->setContentsMargins(0, 12, 0, 0);
+    layout->setSpacing(12);
     layout->setSizeConstraint(QLayout::SetNoConstraint);
 
-    // Header spacer
-    QWidget *header = new QWidget(panel);
-    header->setObjectName("TestPanelHeader");
-    header->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
-    header->setFixedHeight(4);
-    layout->addWidget(header);
+    auto *titleRow = new QWidget(panel);
+    auto *titleLayout = new QHBoxLayout(titleRow);
+    titleLayout->setContentsMargins(12, 0, 12, 0);
+    titleLayout->setSpacing(0);
+    auto *titleLabel = new QLabel("Test cases", titleRow);
+    titleLabel->setObjectName("PanelTitle");
+    titleLayout->addWidget(titleLabel);
+    layout->addWidget(titleRow);
 
     // Scrollable test cases area
     FlexibleScrollArea *scrollArea = new FlexibleScrollArea(panel);
@@ -58,6 +65,12 @@ TestPanelBuilder::PanelWidgets TestPanelBuilder::build(QWidget *parent, QObject 
     scrollArea->setAutoFillBackground(false);
     scrollArea->viewport()->setAutoFillBackground(false);
 
+    widgets.summaryLabel = new QLabel(panel);
+    widgets.summaryLabel->setObjectName("TestSummaryLabel");
+    widgets.summaryLabel->setVisible(false);
+    widgets.summaryLabel->setContentsMargins(12, 0, 12, 0);
+    layout->addWidget(widgets.summaryLabel);
+
     // Cases container
     widgets.casesContainer = new QWidget(scrollArea);
     widgets.casesContainer->setObjectName("CasesContainer");
@@ -69,43 +82,55 @@ TestPanelBuilder::PanelWidgets TestPanelBuilder::build(QWidget *parent, QObject 
     widgets.casesLayout->setContentsMargins(12, 0, 12, 0);
     widgets.casesLayout->setSpacing(12);
     widgets.casesLayout->setAlignment(Qt::AlignTop);
-    
-    scrollArea->setWidget(widgets.casesContainer);
-    layout->addWidget(scrollArea, 1);
 
-    // Action buttons row
-    QWidget *actionsRow = new QWidget(panel);
-    actionsRow->setObjectName("CasesActionRow");
-    actionsRow->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
-    actionsRow->setFixedHeight(28);
-    
-    QHBoxLayout *actionsLayout = new QHBoxLayout(actionsRow);
-    actionsLayout->setContentsMargins(0, 0, 0, 0);
-    actionsLayout->setSpacing(0);
-
-    // Add button
-    widgets.addButton = new QPushButton(actionsRow);
+    // Add button inside the scroll container, below the cases list
+    widgets.addButton = new QPushButton(widgets.casesContainer);
     widgets.addButton->setObjectName("AddCaseButton");
     widgets.addButton->setToolTip("Add test case");
-    widgets.addButton->setIcon(QIcon(":/images/plus.svg"));
+    widgets.addButton->setIcon(
+        IconUtils::makeTintedIcon(":/images/plus.svg", iconColor_, QSize(16, 16)));
     widgets.addButton->setIconSize(QSize(16, 16));
     widgets.addButton->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
     widgets.addButton->setMinimumHeight(28);
     widgets.addButton->setFocusPolicy(Qt::NoFocus);
-    actionsLayout->addWidget(widgets.addButton, 1);
+    widgets.casesLayout->addWidget(widgets.addButton);
+    
+    scrollArea->setWidget(widgets.casesContainer);
+    layout->addWidget(scrollArea, 1);
 
-    // Clear button
-    widgets.clearCasesButton = new QPushButton(actionsRow);
+    // Bottom action buttons row: Run All (left) and Delete All (right)
+    QWidget *bottomRow = new QWidget(panel);
+    bottomRow->setObjectName("CasesActionRow");
+    bottomRow->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+    bottomRow->setFixedHeight(28);
+
+    QHBoxLayout *bottomLayout = new QHBoxLayout(bottomRow);
+    bottomLayout->setContentsMargins(0, 0, 0, 0);
+    bottomLayout->setSpacing(0);
+
+    widgets.runAllButton = new QPushButton(bottomRow);
+    widgets.runAllButton->setObjectName("RunAllButton");
+    widgets.runAllButton->setToolTip("Run all test cases");
+    widgets.runAllButton->setIcon(
+        IconUtils::makeTintedIcon(":/images/play.svg", iconColor_, QSize(16, 16)));
+    widgets.runAllButton->setIconSize(QSize(16, 16));
+    widgets.runAllButton->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+    widgets.runAllButton->setMinimumHeight(28);
+    widgets.runAllButton->setFocusPolicy(Qt::NoFocus);
+    bottomLayout->addWidget(widgets.runAllButton, 1);
+
+    widgets.clearCasesButton = new QPushButton(bottomRow);
     widgets.clearCasesButton->setObjectName("ClearCasesButton");
     widgets.clearCasesButton->setToolTip("Delete all test cases");
-    widgets.clearCasesButton->setIcon(QIcon(":/images/trash.svg"));
+    widgets.clearCasesButton->setIcon(
+        IconUtils::makeTintedIcon(":/images/trash.svg", iconColor_, QSize(16, 16)));
     widgets.clearCasesButton->setIconSize(QSize(16, 16));
     widgets.clearCasesButton->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
     widgets.clearCasesButton->setMinimumHeight(28);
     widgets.clearCasesButton->setFocusPolicy(Qt::NoFocus);
-    actionsLayout->addWidget(widgets.clearCasesButton, 1);
+    bottomLayout->addWidget(widgets.clearCasesButton, 1);
 
-    layout->addWidget(actionsRow);
+    layout->addWidget(bottomRow);
 
     widgets.panel = panel;
     return widgets;
@@ -134,12 +159,17 @@ TestPanelBuilder::CaseWidgets TestPanelBuilder::createCase(QWidget *parent,
     headerLayout->setContentsMargins(0, 0, 0, 0);
     headerLayout->setSpacing(8);
 
-    widgets.titleLabel = new QLabel(QString("Test Case %1").arg(index), headerRow);
+    widgets.titleLabel = new QLabel(QString("TC %1").arg(index), headerRow);
     widgets.titleLabel->setObjectName("TestCaseTitle");
     headerLayout->addWidget(widgets.titleLabel);
+
+    widgets.statusLabel = new QLabel("-", headerRow);
+    widgets.statusLabel->setObjectName("RunStatus");
+    headerLayout->addWidget(widgets.statusLabel);
+
     headerLayout->addStretch();
 
-    // Action buttons
+    // Action buttons in header row
     QWidget *actionButtons = new QWidget(headerRow);
     QHBoxLayout *actionLayout = new QHBoxLayout(actionButtons);
     actionLayout->setContentsMargins(0, 0, 0, 0);
@@ -148,21 +178,24 @@ TestPanelBuilder::CaseWidgets TestPanelBuilder::createCase(QWidget *parent,
     widgets.runButton = new QPushButton(actionButtons);
     widgets.runButton->setObjectName("RunButton");
     widgets.runButton->setToolTip("Compile and Run");
-    widgets.runButton->setIcon(QIcon(":/images/play.svg"));
-    widgets.runButton->setIconSize(QSize(18, 18));
-    widgets.runButton->setFixedSize(30, 26);
+    widgets.runButton->setIcon(
+        IconUtils::makeTintedIcon(":/images/play.svg", iconColor_, QSize(16, 16)));
+    widgets.runButton->setIconSize(QSize(16, 16));
+    widgets.runButton->setFixedSize(28, 28);
     widgets.runButton->setFocusPolicy(Qt::NoFocus);
     actionLayout->addWidget(widgets.runButton);
 
     widgets.deleteButton = new QPushButton(actionButtons);
     widgets.deleteButton->setObjectName("DeleteButton");
     widgets.deleteButton->setToolTip("Delete test case");
-    widgets.deleteButton->setIcon(QIcon(":/images/trash.svg"));
+    widgets.deleteButton->setIcon(
+        IconUtils::makeTintedIcon(":/images/trash.svg", iconColor_, QSize(16, 16)));
     widgets.deleteButton->setIconSize(QSize(16, 16));
-    widgets.deleteButton->setFixedSize(30, 26);
+    widgets.deleteButton->setFixedSize(28, 28);
     widgets.deleteButton->setFocusPolicy(Qt::NoFocus);
     actionLayout->addWidget(widgets.deleteButton);
 
+    headerLayout->addStretch();
     headerLayout->addWidget(actionButtons);
     layout->addWidget(headerRow);
 
@@ -180,26 +213,29 @@ TestPanelBuilder::CaseWidgets TestPanelBuilder::createCase(QWidget *parent,
 
     // Setup placeholder behavior for input/expected editors
     auto setupPlaceholder = [context](AutoResizingTextEdit *editor, const QString &placeholder) {
-        auto updatePlaceholder = [editor, placeholder]() {
-            if (editor->hasFocus()) {
-                editor->setPlaceholderText(QString());
-            } else if (editor->toPlainText().isEmpty()) {
-                editor->setPlaceholderText(placeholder);
+        if (!editor) {
+            return;
+        }
+        QPointer<AutoResizingTextEdit> safeEditor(editor);
+        editor->setElidedPlaceholderText(placeholder);
+        auto updatePlaceholder = [safeEditor]() {
+            if (!safeEditor) {
+                return;
+            }
+            if (safeEditor->hasFocus()) {
+                safeEditor->setPlaceholderVisible(false);
+            } else if (safeEditor->toPlainText().isEmpty()) {
+                safeEditor->setPlaceholderVisible(true);
             }
         };
         QObject::connect(editor, &AutoResizingTextEdit::textChanged, context, updatePlaceholder);
-        QObject::connect(qApp, &QApplication::focusChanged, context, 
+        QObject::connect(qApp, &QApplication::focusChanged, context,
                          [updatePlaceholder](QWidget*, QWidget*) { updatePlaceholder(); });
         updatePlaceholder();
     };
 
     setupPlaceholder(widgets.inputEditor, "Enter input...");
     setupPlaceholder(widgets.expectedEditor, "Enter expected output...");
-
-    // Status label
-    widgets.statusLabel = new QLabel("Status: -", casePanel);
-    widgets.statusLabel->setObjectName("RunStatus");
-    layout->addWidget(widgets.statusLabel);
 
     // Output splitter (initially hidden)
     widgets.outputSplitter = new QSplitter(Qt::Vertical, casePanel);
@@ -270,7 +306,7 @@ QWidget *TestPanelBuilder::createLabeledBlock(QWidget *parent,
     editor->setLineRange(minLines, maxLines);
     
     if (!placeholder.isEmpty()) {
-        editor->setPlaceholderText(placeholder);
+        editor->setElidedPlaceholderText(placeholder);
     }
 
     layout->addWidget(editor);

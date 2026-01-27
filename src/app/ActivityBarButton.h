@@ -24,7 +24,7 @@ private:
 
     QString iconPath_;
     bool hovered_ = false;
-    bool active_ = false;  // Start inactive (gray); becomes white on hover
+    bool active_ = false;  // Start inactive (gray); uses text tint on hover
     QColor normalColor_;
     QColor hoveredColor_;
     QColor inactiveColor_;

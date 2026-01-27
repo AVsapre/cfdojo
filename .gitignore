@@ -40,4 +40,4 @@ cmake-build*/
 .idea/
 
 # Qt/Qt Creator + other tooling artifacts
-.cph/
+.cpack/

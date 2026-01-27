@@ -109,6 +109,7 @@ void CollapsibleSplitter::updateCollapseState() {
     }
 
     const int width = currentSizes.at(collapsibleIndex_);
+    const int collapseThreshold = std::max(1, minPanelWidth_ / 2);
 
     if (collapsed_) {
         // Expand when dragged past minimum
@@ -116,8 +117,8 @@ void CollapsibleSplitter::updateCollapseState() {
             expand();
         }
     } else {
-        // Collapse when shrunk below minimum
-        if (width < minPanelWidth_) {
+        // Collapse when shrunk below half the minimum width
+        if (width < collapseThreshold) {
             collapse();
         } else {
             savedWidth_ = width;
