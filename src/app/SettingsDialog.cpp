@@ -4,6 +4,7 @@
 
 #include <QCheckBox>
 #include <QDir>
+#include <QDialog>
 #include <QEvent>
 #include <QFileDialog>
 #include <QFormLayout>
@@ -12,6 +13,8 @@
 #include <QLabel>
 #include <QLineEdit>
 #include <QMessageBox>
+#include <QComboBox>
+#include <QCloseEvent>
 #include <Qsci/qsciscintilla.h>
 #include <Qsci/qscilexercpp.h>
 #include <QFont>
@@ -154,7 +157,7 @@ void SettingsDialog::setupUi() {
     tabWidget_ = new QTabWidget(this);
     tabWidget_->addTab(createGeneralTab(), "General");
     tabWidget_->addTab(createTemplateTab(), "Template");
-    tabWidget_->addTab(createCompilerTab(), "Compiler");
+    tabWidget_->addTab(createLanguagesTab(), "Languages");
     tabWidget_->addTab(createExperimentalTab(), "Experimental");
     tabWidget_->addTab(createAboutTab(), "About");
     
@@ -212,51 +215,96 @@ QWidget* SettingsDialog::createTemplateTab() {
     auto *layout = new QVBoxLayout(widget);
     layout->setContentsMargins(12, 12, 12, 12);
 
-    auto *label = new QLabel(
-        "Template code with <code>//#main</code> transclusion marker.<br>"
-        "When compiling, <code>//#main</code> is replaced with your solution code.");
-    label->setWordWrap(true);
-    label->setTextFormat(Qt::RichText);
-    layout->addWidget(label);
+    auto *templateGroup = new QGroupBox("Template", widget);
+    auto *groupLayout = new QVBoxLayout(templateGroup);
+    groupLayout->setContentsMargins(12, 12, 12, 12);
+    groupLayout->setSpacing(8);
 
-    templateEditor_ = new QsciScintilla(widget);
-    templateEditor_->setUtf8(true);
-    templateEditor_->setText("//#main");
-    templateEditor_->setTabWidth(4);
-    templateEditor_->setIndentationWidth(4);
-    templateEditor_->setIndentationsUseTabs(true);
-    templateEditor_->setTabIndents(true);
-    templateEditor_->setBackspaceUnindents(true);
-    templateEditor_->setMarginWidth(0, 0); // Hide line numbers for template
-    templateEditor_->setMarginWidth(1, 0);
-    templateEditor_->setMarginWidth(2, 0);
-    templateEditor_->setFolding(QsciScintilla::NoFoldStyle);
-    templateEditor_->setWrapMode(QsciScintilla::WrapNone);
-    applyTemplateEditorTheme(templateEditor_);
-    connect(templateEditor_, &QsciScintilla::textChanged,
+    auto *formLayout = new QFormLayout();
+    formLayout->setContentsMargins(0, 0, 0, 0);
+    formLayout->setSpacing(8);
+
+    templateSummaryEdit_ = new QLineEdit(templateGroup);
+    templateSummaryEdit_->setReadOnly(true);
+    templateSummaryEdit_->setPlaceholderText("Click to edit template");
+    templateSummaryEdit_->setCursor(Qt::PointingHandCursor);
+    templateSummaryEdit_->installEventFilter(this);
+
+    formLayout->addRow("Default template:", templateSummaryEdit_);
+
+    groupLayout->addLayout(formLayout);
+
+    transcludeTemplateCheckbox_ = new QCheckBox("Transclude template", templateGroup);
+    transcludeTemplateCheckbox_->setChecked(false);
+    connect(transcludeTemplateCheckbox_, &QCheckBox::toggled,
             this, &SettingsDialog::settingsChanged);
-    layout->addWidget(templateEditor_);
+    groupLayout->addWidget(transcludeTemplateCheckbox_);
+
+    layout->addWidget(templateGroup);
+    layout->addStretch();
+    updateTemplateSummary();
 
     return widget;
 }
 
-QWidget* SettingsDialog::createCompilerTab() {
+QWidget* SettingsDialog::createLanguagesTab() {
     auto *widget = new QWidget();
     auto *layout = new QVBoxLayout(widget);
     layout->setContentsMargins(12, 12, 12, 12);
 
-    auto *compilerGroup = new QGroupBox("C++ Compiler", widget);
-    auto *compilerLayout = new QFormLayout(compilerGroup);
+    auto *defaultGroup = new QGroupBox("Default Language", widget);
+    auto *defaultLayout = new QFormLayout(defaultGroup);
 
-    compilerPathEdit_ = new QLineEdit(compilerGroup);
-    compilerPathEdit_->setPlaceholderText("g++");
-    compilerLayout->addRow("Compiler Path:", compilerPathEdit_);
+    defaultLanguageCombo_ = new QComboBox(defaultGroup);
+    defaultLanguageCombo_->addItem("C++");
+    defaultLanguageCombo_->addItem("Python");
+    defaultLanguageCombo_->addItem("Java");
+    defaultLanguageCombo_->setCurrentIndex(0);
+    connect(defaultLanguageCombo_, &QComboBox::currentTextChanged,
+            this, &SettingsDialog::settingsChanged);
+    defaultLayout->addRow("Default language:", defaultLanguageCombo_);
 
-    compilerFlagsEdit_ = new QLineEdit(compilerGroup);
-    compilerFlagsEdit_->setPlaceholderText("-O2 -std=c++17");
-    compilerLayout->addRow("Compiler Flags:", compilerFlagsEdit_);
+    auto *cppGroup = new QGroupBox("C++", widget);
+    auto *cppLayout = new QFormLayout(cppGroup);
 
-    layout->addWidget(compilerGroup);
+    cppCompilerPathEdit_ = new QLineEdit(cppGroup);
+    cppCompilerPathEdit_->setPlaceholderText("g++");
+    cppLayout->addRow("Compiler Path:", cppCompilerPathEdit_);
+
+    cppCompilerFlagsEdit_ = new QLineEdit(cppGroup);
+    cppCompilerFlagsEdit_->setPlaceholderText("-O2 -std=c++17");
+    cppLayout->addRow("Compiler Flags:", cppCompilerFlagsEdit_);
+
+    auto *pythonGroup = new QGroupBox("Python", widget);
+    auto *pythonLayout = new QFormLayout(pythonGroup);
+
+    pythonPathEdit_ = new QLineEdit(pythonGroup);
+    pythonPathEdit_->setPlaceholderText("python3");
+    pythonLayout->addRow("Interpreter Path:", pythonPathEdit_);
+
+    pythonArgsEdit_ = new QLineEdit(pythonGroup);
+    pythonArgsEdit_->setPlaceholderText("-O");
+    pythonLayout->addRow("Run Args:", pythonArgsEdit_);
+
+    auto *javaGroup = new QGroupBox("Java", widget);
+    auto *javaLayout = new QFormLayout(javaGroup);
+
+    javaCompilerPathEdit_ = new QLineEdit(javaGroup);
+    javaCompilerPathEdit_->setPlaceholderText("javac");
+    javaLayout->addRow("Compiler Path:", javaCompilerPathEdit_);
+
+    javaRunPathEdit_ = new QLineEdit(javaGroup);
+    javaRunPathEdit_->setPlaceholderText("java");
+    javaLayout->addRow("Runtime Path:", javaRunPathEdit_);
+
+    javaArgsEdit_ = new QLineEdit(javaGroup);
+    javaArgsEdit_->setPlaceholderText("");
+    javaLayout->addRow("Run Args:", javaArgsEdit_);
+
+    layout->addWidget(defaultGroup);
+    layout->addWidget(cppGroup);
+    layout->addWidget(pythonGroup);
+    layout->addWidget(javaGroup);
     layout->addStretch();
 
     return widget;
@@ -314,6 +362,39 @@ QWidget* SettingsDialog::createAboutTab() {
     descLabel->setWordWrap(true);
     layout->addWidget(descLabel);
 
+    layout->addSpacing(12);
+
+    auto *helpGroup = new QGroupBox("Help", widget);
+    auto *helpLayout = new QVBoxLayout(helpGroup);
+    auto *helpLabel = new QLabel("Tooltips across the app provide quick usage hints.", helpGroup);
+    helpLabel->setWordWrap(true);
+    helpLayout->addWidget(helpLabel);
+    layout->addWidget(helpGroup);
+
+    auto *creditsGroup = new QGroupBox("Credits", widget);
+    auto *creditsLayout = new QVBoxLayout(creditsGroup);
+    auto *creditsLabel = new QLabel(creditsGroup);
+    creditsLabel->setTextFormat(Qt::RichText);
+    creditsLabel->setOpenExternalLinks(true);
+    creditsLabel->setWordWrap(true);
+    creditsLabel->setText(
+        "Icon sources (The Noun Project):"
+        "<br><span style=\"opacity:0.8;\">License: CC BY 3.0</span>"
+        "<ul>"
+        "<li>Template - Mamank - <a href=\"https://thenounproject.com/icon/template-8113543/\">source</a></li>"
+        "<li>Trash - insdesign86 - <a href=\"https://thenounproject.com/icon/trash-4665730/\">source</a></li>"
+        "<li>Test case - SBTS - <a href=\"https://thenounproject.com/icon/test-case-2715499/\">source</a></li>"
+        "<li>Anvil - Alum Design - <a href=\"https://thenounproject.com/icon/anvil-8089762/\">source</a></li>"
+        "<li>Load testing - Happy Girl - <a href=\"https://thenounproject.com/icon/load-testing-6394477/\">source</a></li>"
+        "<li>Copy - Kosong Tujuh - <a href=\"https://thenounproject.com/icon/copy-5457986/\">source</a></li>"
+        "<li>File - Damar Creative - <a href=\"https://thenounproject.com/icon/8251834/\">source</a></li>"
+        "<li>Target - Radhika Studio - <a href=\"https://thenounproject.com/icon/8090227/\">source</a></li>"
+        "<li>Settings - Alzam - <a href=\"https://thenounproject.com/icon/5079171/\">source</a></li>"
+        "<li>Battle - Zach Bogart - <a href=\"https://thenounproject.com/icon/5248405/\">source</a></li>"
+        "</ul>");
+    creditsLayout->addWidget(creditsLabel);
+    layout->addWidget(creditsGroup);
+
     layout->addStretch();
 
     return widget;
@@ -321,35 +402,108 @@ QWidget* SettingsDialog::createAboutTab() {
 
 
 void SettingsDialog::setTemplate(const QString &tmpl) {
-    if (templateEditor_) {
-        QSignalBlocker blocker(templateEditor_);
-        templateEditor_->setText(tmpl);
-    }
+    templateText_ = tmpl;
+    updateTemplateSummary();
 }
 
-
 QString SettingsDialog::getTemplate() const {
-    return templateEditor_ ? templateEditor_->text() : "//#main";
+    return templateText_.isEmpty() ? QString("//#main") : templateText_;
+}
+
+void SettingsDialog::setTranscludeTemplateEnabled(bool enabled) {
+    if (!transcludeTemplateCheckbox_) {
+        return;
+    }
+    QSignalBlocker blocker(transcludeTemplateCheckbox_);
+    transcludeTemplateCheckbox_->setChecked(enabled);
+}
+
+bool SettingsDialog::isTranscludeTemplateEnabled() const {
+    return transcludeTemplateCheckbox_ ? transcludeTemplateCheckbox_->isChecked() : false;
 }
 
 void SettingsDialog::setCompilerPath(const QString &path) {
-    if (compilerPathEdit_) {
-        compilerPathEdit_->setText(path);
+    if (cppCompilerPathEdit_) {
+        cppCompilerPathEdit_->setText(path);
     }
 }
 
 QString SettingsDialog::compilerPath() const {
-    return compilerPathEdit_ ? compilerPathEdit_->text() : "g++";
+    return cppCompilerPathEdit_ ? cppCompilerPathEdit_->text() : "g++";
 }
 
 void SettingsDialog::setCompilerFlags(const QString &flags) {
-    if (compilerFlagsEdit_) {
-        compilerFlagsEdit_->setText(flags);
+    if (cppCompilerFlagsEdit_) {
+        cppCompilerFlagsEdit_->setText(flags);
     }
 }
 
 QString SettingsDialog::compilerFlags() const {
-    return compilerFlagsEdit_ ? compilerFlagsEdit_->text() : "";
+    return cppCompilerFlagsEdit_ ? cppCompilerFlagsEdit_->text() : "";
+}
+
+void SettingsDialog::setDefaultLanguage(const QString &language) {
+    if (!defaultLanguageCombo_) {
+        return;
+    }
+    const int idx = defaultLanguageCombo_->findText(language);
+    if (idx >= 0) {
+        defaultLanguageCombo_->setCurrentIndex(idx);
+    }
+}
+
+QString SettingsDialog::defaultLanguage() const {
+    return defaultLanguageCombo_ ? defaultLanguageCombo_->currentText() : "C++";
+}
+
+void SettingsDialog::setPythonPath(const QString &path) {
+    if (pythonPathEdit_) {
+        pythonPathEdit_->setText(path);
+    }
+}
+
+QString SettingsDialog::pythonPath() const {
+    return pythonPathEdit_ ? pythonPathEdit_->text() : "python3";
+}
+
+void SettingsDialog::setPythonArgs(const QString &args) {
+    if (pythonArgsEdit_) {
+        pythonArgsEdit_->setText(args);
+    }
+}
+
+QString SettingsDialog::pythonArgs() const {
+    return pythonArgsEdit_ ? pythonArgsEdit_->text() : "";
+}
+
+void SettingsDialog::setJavaCompilerPath(const QString &path) {
+    if (javaCompilerPathEdit_) {
+        javaCompilerPathEdit_->setText(path);
+    }
+}
+
+QString SettingsDialog::javaCompilerPath() const {
+    return javaCompilerPathEdit_ ? javaCompilerPathEdit_->text() : "javac";
+}
+
+void SettingsDialog::setJavaRunPath(const QString &path) {
+    if (javaRunPathEdit_) {
+        javaRunPathEdit_->setText(path);
+    }
+}
+
+QString SettingsDialog::javaRunPath() const {
+    return javaRunPathEdit_ ? javaRunPathEdit_->text() : "java";
+}
+
+void SettingsDialog::setJavaArgs(const QString &args) {
+    if (javaArgsEdit_) {
+        javaArgsEdit_->setText(args);
+    }
+}
+
+QString SettingsDialog::javaArgs() const {
+    return javaArgsEdit_ ? javaArgsEdit_->text() : "";
 }
 
 void SettingsDialog::setRootDir(const QString &path) {
@@ -419,5 +573,93 @@ bool SettingsDialog::eventFilter(QObject *obj, QEvent *event) {
         }
         return true;
     }
+    if (obj == templateSummaryEdit_ && event->type() == QEvent::MouseButtonPress) {
+        openTemplateEditorDialog();
+        return true;
+    }
     return QWidget::eventFilter(obj, event);
+}
+
+void SettingsDialog::closeEvent(QCloseEvent *event) {
+    emit closed();
+    QWidget::closeEvent(event);
+}
+
+void SettingsDialog::openTemplateEditorDialog() {
+    QDialog dialog(this);
+    dialog.setWindowTitle("Template");
+    dialog.setMinimumSize(640, 480);
+
+    auto *layout = new QVBoxLayout(&dialog);
+    layout->setContentsMargins(0, 0, 0, 0);
+    layout->setSpacing(0);
+
+    ThemeManager theme;
+    const ThemeColors &colors = theme.colors();
+    const QColor panelBg = colors.background;
+    const QColor panelEdge = colors.edge;
+
+    auto *contentPanel = new QWidget(&dialog);
+    contentPanel->setObjectName("TemplateEditorPanel");
+    contentPanel->setAttribute(Qt::WA_StyledBackground, true);
+    contentPanel->setStyleSheet(
+        QString("QWidget#TemplateEditorPanel { background: %1; }").arg(panelBg.name()));
+
+    auto *contentLayout = new QVBoxLayout(contentPanel);
+    contentLayout->setContentsMargins(12, 12, 12, 12);
+    contentLayout->setSpacing(12);
+
+    auto *editor = new QsciScintilla(contentPanel);
+    editor->setUtf8(true);
+    editor->setText(templateText_.isEmpty() ? QString("//#main") : templateText_);
+    editor->setTabWidth(4);
+    editor->setIndentationWidth(4);
+    editor->setIndentationsUseTabs(true);
+    editor->setTabIndents(true);
+    editor->setBackspaceUnindents(true);
+    editor->setMarginWidth(0, 0);
+    editor->setMarginWidth(1, 0);
+    editor->setMarginWidth(2, 0);
+    editor->setFolding(QsciScintilla::NoFoldStyle);
+    editor->setWrapMode(QsciScintilla::WrapNone);
+    applyTemplateEditorTheme(editor);
+    editor->setStyleSheet(QString("QsciScintilla { background: %1; border: 1px solid %2; }")
+                               .arg(panelBg.name(), panelEdge.name()));
+    contentLayout->addWidget(editor, 1);
+
+    auto *buttonRow = new QWidget(contentPanel);
+    auto *buttonLayout = new QHBoxLayout(buttonRow);
+    buttonLayout->setContentsMargins(0, 0, 0, 0);
+    buttonLayout->setSpacing(8);
+
+    auto *tipLabel = new QLabel("Your solution is inserted at the //#main marker in the template.", buttonRow);
+    tipLabel->setWordWrap(false);
+    tipLabel->setStyleSheet("color: #9aa0a6; font-size: 11px;");
+    buttonLayout->addWidget(tipLabel);
+    buttonLayout->addStretch();
+
+    auto *cancelBtn = new QPushButton("Cancel", buttonRow);
+    connect(cancelBtn, &QPushButton::clicked, &dialog, &QDialog::reject);
+    buttonLayout->addWidget(cancelBtn);
+
+    auto *saveBtn = new QPushButton("Save", buttonRow);
+    saveBtn->setObjectName("PrimaryAction");
+    connect(saveBtn, &QPushButton::clicked, &dialog, &QDialog::accept);
+    buttonLayout->addWidget(saveBtn);
+
+    contentLayout->addWidget(buttonRow);
+    layout->addWidget(contentPanel, 1);
+
+    if (dialog.exec() == QDialog::Accepted) {
+        templateText_ = editor->text();
+        updateTemplateSummary();
+        emit settingsChanged();
+    }
+}
+
+void SettingsDialog::updateTemplateSummary() {
+    if (!templateSummaryEdit_) {
+        return;
+    }
+    templateSummaryEdit_->setText(QString());
 }

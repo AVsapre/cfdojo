@@ -294,47 +294,47 @@ QPushButton#PrimaryAction:pressed {
 }
 
 QPushButton#RunButton {
-    background-color: @success@;
+    background-color: @greenbutton@;
     color: @textcolor@;
     border: none;
     border-radius: 0px;
     padding: 0px;
 }
 QPushButton#RunButton[stop="true"] {
-    background-color: #f2d13b;
+    background-color: @yellowbutton@;
     color: @textcolor@;
 }
 QPushButton#RunButton:hover {
-    background-color: @successHover@;
+    background-color: @greenbuttonHover@;
 }
 QPushButton#RunButton[stop="true"]:hover {
-    background-color: #f6db5f;
+    background-color: @yellowbuttonHover@;
     color: @textcolor@;
 }
 QPushButton#RunButton:pressed {
-    background-color: @successPressed@;
+    background-color: @greenbuttonPressed@;
 }
 QPushButton#RunButton[stop="true"]:pressed {
-    background-color: #d6b42f;
+    background-color: @yellowbuttonPressed@;
     color: @textcolor@;
 }
 
 QPushButton#DeleteButton {
-    background-color: @danger@;
+    background-color: @redbutton@;
     color: @textcolor@;
     border: none;
     border-radius: 0px;
     padding: 0px;
 }
 QPushButton#DeleteButton:hover {
-    background-color: @dangerHover@;
+    background-color: @redbuttonHover@;
 }
 QPushButton#DeleteButton:pressed {
-    background-color: @dangerPressed@;
+    background-color: @redbuttonPressed@;
 }
 
 QPushButton#RunAllButton {
-    background-color: @success@;
+    background-color: @greenbutton@;
     color: @textcolor@;
     border: none;
     font-weight: 700;
@@ -342,14 +342,14 @@ QPushButton#RunAllButton {
     padding: 0px;
 }
 QPushButton#RunAllButton:hover {
-    background-color: @successHover@;
+    background-color: @greenbuttonHover@;
 }
 QPushButton#RunAllButton:pressed {
-    background-color: @successPressed@;
+    background-color: @greenbuttonPressed@;
 }
 
 QPushButton#AddCaseButton {
-    background-color: @info@;
+    background-color: @bluebutton@;
     color: @textcolor@;
     border: none;
     font-weight: 700;
@@ -357,10 +357,10 @@ QPushButton#AddCaseButton {
     padding: 0px;
 }
 QPushButton#AddCaseButton:hover {
-    background-color: @infoHover@;
+    background-color: @bluebuttonHover@;
 }
 QPushButton#AddCaseButton:pressed {
-    background-color: @infoPressed@;
+    background-color: @bluebuttonPressed@;
 }
 
 QPushButton#StressSolutionButton,
@@ -372,66 +372,66 @@ QPushButton#StressGeneratorButton {
 }
 
 QPushButton#StressSolutionButton {
-    background-color: @info@;
+    background-color: @bluebutton@;
 }
 QPushButton#StressSolutionButton:hover {
-    background-color: @infoHover@;
+    background-color: @bluebuttonHover@;
 }
 QPushButton#StressSolutionButton:pressed {
-    background-color: @infoPressed@;
+    background-color: @bluebuttonPressed@;
 }
 QPushButton#StressSolutionButton:checked {
-    background-color: @infoPressed@;
+    background-color: @bluebuttonPressed@;
 }
 QPushButton#StressSolutionButton:checked:hover {
-    background-color: @infoPressed@;
+    background-color: @bluebuttonPressed@;
 }
 
 QPushButton#StressBruteButton {
-    background-color: @info@;
+    background-color: @bluebutton@;
 }
 QPushButton#StressBruteButton:hover {
-    background-color: @infoHover@;
+    background-color: @bluebuttonHover@;
 }
 QPushButton#StressBruteButton:pressed {
-    background-color: @infoPressed@;
+    background-color: @bluebuttonPressed@;
 }
 QPushButton#StressBruteButton:checked {
-    background-color: @infoPressed@;
+    background-color: @bluebuttonPressed@;
 }
 QPushButton#StressBruteButton:checked:hover {
-    background-color: @infoPressed@;
+    background-color: @bluebuttonPressed@;
 }
 
 QPushButton#StressGeneratorButton {
-    background-color: @info@;
+    background-color: @bluebutton@;
 }
 QPushButton#StressGeneratorButton:hover {
-    background-color: @infoHover@;
+    background-color: @bluebuttonHover@;
 }
 QPushButton#StressGeneratorButton:pressed {
-    background-color: @infoPressed@;
+    background-color: @bluebuttonPressed@;
 }
 QPushButton#StressGeneratorButton:checked {
-    background-color: @infoPressed@;
+    background-color: @bluebuttonPressed@;
 }
 QPushButton#StressGeneratorButton:checked:hover {
-    background-color: @infoPressed@;
+    background-color: @bluebuttonPressed@;
 }
 
 
 QPushButton#ClearCasesButton {
-    background-color: @danger@;
+    background-color: @redbutton@;
     color: @textcolor@;
     border: none;
     border-radius: 0px;
     padding: 0px;
 }
 QPushButton#ClearCasesButton:hover {
-    background-color: @dangerHover@;
+    background-color: @redbuttonHover@;
 }
 QPushButton#ClearCasesButton:pressed {
-    background-color: @dangerPressed@;
+    background-color: @redbuttonPressed@;
 }
 
 LandingButton#TrainingChoice,
@@ -482,6 +482,11 @@ QLabel#RunStatus {
 }
 
 QLabel#TestSummaryLabel {
+    color: @textcolor@;
+    font-size: 12px;
+}
+
+QLabel#StressComplexityLabel {
     color: @textcolor@;
     font-size: 12px;
 }

@@ -31,6 +31,7 @@ class QTimer;
 class QPlainTextEdit;
 class QLineEdit;
 class QStandardItemModel;
+class QStandardItem;
 template <typename T>
 class QFutureWatcher;
 
@@ -121,6 +122,7 @@ private:
     QString buildProblemJson() const;
     QString buildTestcasesJson() const;
     void updateActivityBarActiveStates(bool collapsed);
+    void updateTemplateAvailability();
 
     // Core managers
     ThemeManager themeManager_;
@@ -141,6 +143,7 @@ private:
     ActivityBarButton *newFileButton_ = nullptr;
     ActivityBarButton *settingsButton_ = nullptr;
     ActivityBarButton *backButton_ = nullptr;
+    QPushButton *menuTemplateButton_ = nullptr;
 
     // Landing page
     QWidget *landingPage_ = nullptr;
@@ -155,6 +158,7 @@ private:
     QWidget *cpackPanel_ = nullptr;
     QPushButton *stressRunButton_ = nullptr;
     QLabel *stressStatusLabel_ = nullptr;
+    QLabel *stressComplexityLabel_ = nullptr;
     QPlainTextEdit *stressLog_ = nullptr;
     QLineEdit *stressCountEdit_ = nullptr;
     QFutureWatcher<StressResult> *stressWatcher_ = nullptr;
@@ -164,6 +168,7 @@ private:
     bool runAllCollecting_ = false;
     QTreeView *cpackTree_ = nullptr;
     QStandardItemModel *cpackModel_ = nullptr;
+    QStandardItem *cpackTemplateItem_ = nullptr;
     QTreeView *fileTree_ = nullptr;
     QFileSystemModel *fileModel_ = nullptr;
     QsciScintilla *codeEditor_ = nullptr;
@@ -217,6 +222,7 @@ private:
     
     // Experimental settings
     bool multithreadingEnabled_ = false;
+    bool transcludeTemplateEnabled_ = false;
 
     // Dirty state
     bool isDirty_ = false;

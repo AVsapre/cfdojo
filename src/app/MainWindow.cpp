@@ -65,8 +65,16 @@ QString loadDefaultTemplate() {
     return stored.isEmpty() ? QString("//#main") : stored;
 }
 
-QString estimateComplexityLabel(const std::vector<double> &sizes,
-                                const std::vector<double> &timesMs) {
+struct RegressionResult {
+    bool ok = false;
+    double slope = 0.0;
+    double r2 = 0.0;
+    double maxMs = 0.0;
+};
+
+RegressionResult computeLogLogRegression(const std::vector<double> &sizes,
+                                         const std::vector<double> &timesMs) {
+    RegressionResult result;
     std::vector<double> xs;
     std::vector<double> ys;
     xs.reserve(sizes.size());
@@ -75,14 +83,18 @@ QString estimateComplexityLabel(const std::vector<double> &sizes,
     for (size_t i = 0; i < sizes.size() && i < timesMs.size(); ++i) {
         const double n = sizes[i];
         const double t = timesMs[i];
-        if (n > 0.0 && t > 0.0) {
+        if (n > 0.0) {
+            const double tForFit = t > 0.0 ? t : 1.0;
             xs.push_back(std::log(n));
-            ys.push_back(std::log(t));
+            ys.push_back(std::log(tForFit));
+            if (t > 0.0) {
+                result.maxMs = std::max(result.maxMs, t);
+            }
         }
     }
 
     if (xs.size() < 3) {
-        return QString();
+        return result;
     }
 
     double sumX = 0.0;
@@ -103,7 +115,7 @@ QString estimateComplexityLabel(const std::vector<double> &sizes,
     }
 
     if (den <= 0.0) {
-        return QString();
+        return result;
     }
 
     const double slope = num / den;
@@ -118,9 +130,67 @@ QString estimateComplexityLabel(const std::vector<double> &sizes,
     }
     const double r2 = ssTot > 0.0 ? (1.0 - (ssRes / ssTot)) : 0.0;
 
+    result.ok = true;
+    result.slope = slope;
+    result.r2 = r2;
+    return result;
+}
+
+QString estimateComplexityLabel(const std::vector<double> &sizes,
+                                const std::vector<double> &timesMs) {
+    const RegressionResult reg = computeLogLogRegression(sizes, timesMs);
+    if (!reg.ok) {
+        return QString();
+    }
     return QString("Estimated: T ≈ a·n^%1 (R²=%2)")
-        .arg(slope, 0, 'f', 2)
-        .arg(r2, 0, 'f', 2);
+        .arg(reg.slope, 0, 'f', 2)
+        .arg(reg.r2, 0, 'f', 2);
+}
+
+QString suspectedComplexityLabel(const std::vector<double> &sizes,
+                                 const std::vector<double> &timesMs) {
+    const RegressionResult reg = computeLogLogRegression(sizes, timesMs);
+    if (!reg.ok) {
+        return QString("Suspected: insufficient timing data");
+    }
+    struct Bucket {
+        const char *label;
+        const char *title;
+        const char *desc;
+    };
+
+    const double k = reg.slope;
+    Bucket bucket;
+    if (k < 0.15) {
+        bucket = {"O(1)", "constant", "Doesn’t scale with input."};
+    } else if (k < 0.5) {
+        bucket = {"O(log n)", "logarithmic", "Grows very slowly. Doubling n adds ~1 step."};
+    } else if (k < 1.15) {
+        bucket = {"O(n)", "linear", "Double input → double work."};
+    } else if (k < 1.6) {
+        bucket = {"O(n log n)", "near-linear", "Slightly worse than linear, still excellent."};
+    } else if (k < 2.4) {
+        bucket = {"O(n²)", "quadratic", "Works for small n, explodes fast."};
+    } else if (k < 3.2) {
+        bucket = {"O(n³)", "cubic", "Only acceptable for very small n."};
+    } else {
+        bucket = {"O(2ⁿ)/O(n!)", "exponential / factorial", "Impossible past tiny n."};
+    }
+
+    const QString maxTime =
+        reg.maxMs > 0.0 ? QString(" • max %1 ms").arg(reg.maxMs, 0, 'f', 0)
+                        : QString(" • max <1 ms");
+    const QString summary = QString("Suspected: %1 — %2")
+        .arg(bucket.label)
+        .arg(bucket.title);
+    const QString fit = QString("Fit: n^%1 (R²=%2)%3")
+        .arg(reg.slope, 0, 'f', 2)
+        .arg(reg.r2, 0, 'f', 2)
+        .arg(maxTime);
+    return QString("%1\n%2\n%3")
+        .arg(summary)
+        .arg(bucket.desc)
+        .arg(fit);
 }
 } // namespace
 
@@ -131,6 +201,9 @@ MainWindow::MainWindow(QWidget *parent)
       parallelExecutor_(new ParallelExecutor(this)),
       baseAppFont_(qApp->font()) {
     currentTemplate_ = loadDefaultTemplate();
+    QSettings settings("CF Dojo", "CF Dojo");
+    transcludeTemplateEnabled_ = settings.value("transcludeTemplate", false).toBool();
+    executionController_->setTranscludeTemplateEnabled(transcludeTemplateEnabled_);
     themeManager_.apply(qApp, uiScale_);
     executionController_->setIconTintColor(themeManager_.textColor());
     setupUi();
@@ -372,15 +445,26 @@ void MainWindow::setupActivityBar() {
         }
     });
 
-    // New file button
-    newFileButton_ = new ActivityBarButton(":/images/file.svg", activityBar_);
+    layout->addWidget(sidebarToggle_, 0, Qt::AlignTop);
+    layout->addWidget(stressTestButton_, 0, Qt::AlignTop);
+    layout->addWidget(templateButton_, 0, Qt::AlignTop);
+    layout->addStretch();
+
+    // Bottom buttons container
+    auto *bottomPanel = new QWidget(buttonColumn);
+    auto *bottomLayout = new QVBoxLayout(bottomPanel);
+    bottomLayout->setContentsMargins(0, 0, 0, 0);
+    bottomLayout->setSpacing(0);
+
+    // New file button (bottom section)
+    newFileButton_ = new ActivityBarButton(":/images/file.svg", bottomPanel);
     newFileButton_->setObjectName("NewFileButton");
     newFileButton_->setFixedHeight(kActivityBarWidth);
     newFileButton_->setToolTip("File Explorer");
     newFileButton_->setCheckable(true);
     newFileButton_->setChecked(false);
     applyActivityTint(newFileButton_);
-    
+
     connect(newFileButton_, &QPushButton::clicked, this, [this]() {
         if (!mainSplitter_ || !sideStack_ || !fileExplorer_) {
             return;
@@ -398,18 +482,6 @@ void MainWindow::setupActivityBar() {
             templateButton_->setChecked(false);
         }
     });
-
-    layout->addWidget(sidebarToggle_, 0, Qt::AlignTop);
-    layout->addWidget(stressTestButton_, 0, Qt::AlignTop);
-    layout->addWidget(templateButton_, 0, Qt::AlignTop);
-    layout->addWidget(newFileButton_, 0, Qt::AlignTop);
-    layout->addStretch();
-
-    // Bottom buttons container
-    auto *bottomPanel = new QWidget(buttonColumn);
-    auto *bottomLayout = new QVBoxLayout(bottomPanel);
-    bottomLayout->setContentsMargins(0, 0, 0, 0);
-    bottomLayout->setSpacing(0);
 
     settingsButton_ = new ActivityBarButton(":/images/settings.svg", bottomPanel);
     settingsButton_->setObjectName("SettingsButton");
@@ -432,6 +504,7 @@ void MainWindow::setupActivityBar() {
         }
     });
 
+    bottomLayout->addWidget(newFileButton_);
     bottomLayout->addWidget(settingsButton_);
     bottomLayout->addWidget(backButton_);
     layout->addWidget(bottomPanel, 0, Qt::AlignBottom);
@@ -450,6 +523,26 @@ void MainWindow::openSettingsDialog() {
         settingsWindow_ = new SettingsDialog(this);
         settingsWindow_->setTemplate(currentTemplate_);
         settingsWindow_->setMultithreadingEnabled(multithreadingEnabled_);
+        settingsWindow_->setTranscludeTemplateEnabled(transcludeTemplateEnabled_);
+        {
+            QSettings settings("CF Dojo", "CF Dojo");
+            settingsWindow_->setDefaultLanguage(
+                settings.value("defaultLanguage", "C++").toString());
+            settingsWindow_->setCompilerPath(
+                settings.value("cppCompilerPath", "g++").toString());
+            settingsWindow_->setCompilerFlags(
+                settings.value("cppCompilerFlags", "-O2 -std=c++17").toString());
+            settingsWindow_->setPythonPath(
+                settings.value("pythonPath", "python3").toString());
+            settingsWindow_->setPythonArgs(
+                settings.value("pythonArgs", "").toString());
+            settingsWindow_->setJavaCompilerPath(
+                settings.value("javaCompilerPath", "javac").toString());
+            settingsWindow_->setJavaRunPath(
+                settings.value("javaRunPath", "java").toString());
+            settingsWindow_->setJavaArgs(
+                settings.value("javaArgs", "").toString());
+        }
 
         connect(settingsWindow_, &SettingsDialog::settingsChanged, this, [this]() {
             currentTemplate_ = settingsWindow_->getTemplate();
@@ -459,6 +552,14 @@ void MainWindow::openSettingsDialog() {
         connect(settingsWindow_, &QWidget::destroyed, this, [this]() {
             if (settingsButton_) {
                 settingsButton_->setChecked(false);
+                settingsButton_->setActiveState(false);
+            }
+        });
+
+        connect(settingsWindow_, &SettingsDialog::closed, this, [this]() {
+            if (settingsButton_) {
+                settingsButton_->setChecked(false);
+                settingsButton_->setActiveState(false);
             }
         });
 
@@ -467,23 +568,56 @@ void MainWindow::openSettingsDialog() {
             QSettings settings("CF Dojo", "CF Dojo");
             settings.setValue("defaultTemplate", currentTemplate_);
             multithreadingEnabled_ = settingsWindow_->isMultithreadingEnabled();
+            transcludeTemplateEnabled_ = settingsWindow_->isTranscludeTemplateEnabled();
+            settings.setValue("transcludeTemplate", transcludeTemplateEnabled_);
+            executionController_->setTranscludeTemplateEnabled(transcludeTemplateEnabled_);
+            updateTemplateAvailability();
+            settings.setValue("defaultLanguage", settingsWindow_->defaultLanguage());
+            settings.setValue("cppCompilerPath", settingsWindow_->compilerPath());
+            settings.setValue("cppCompilerFlags", settingsWindow_->compilerFlags());
+            settings.setValue("pythonPath", settingsWindow_->pythonPath());
+            settings.setValue("pythonArgs", settingsWindow_->pythonArgs());
+            settings.setValue("javaCompilerPath", settingsWindow_->javaCompilerPath());
+            settings.setValue("javaRunPath", settingsWindow_->javaRunPath());
+            settings.setValue("javaArgs", settingsWindow_->javaArgs());
             if (settingsButton_) {
                 settingsButton_->setChecked(false);
+                settingsButton_->setActiveState(false);
             }
         });
 
         connect(settingsWindow_, &SettingsDialog::cancelled, this, [this]() {
             if (settingsButton_) {
                 settingsButton_->setChecked(false);
+                settingsButton_->setActiveState(false);
             }
         });
     } else {
         settingsWindow_->setTemplate(currentTemplate_);
         settingsWindow_->setMultithreadingEnabled(multithreadingEnabled_);
+        settingsWindow_->setTranscludeTemplateEnabled(transcludeTemplateEnabled_);
+        QSettings settings("CF Dojo", "CF Dojo");
+        settingsWindow_->setDefaultLanguage(
+            settings.value("defaultLanguage", "C++").toString());
+        settingsWindow_->setCompilerPath(
+            settings.value("cppCompilerPath", "g++").toString());
+        settingsWindow_->setCompilerFlags(
+            settings.value("cppCompilerFlags", "-O2 -std=c++17").toString());
+        settingsWindow_->setPythonPath(
+            settings.value("pythonPath", "python3").toString());
+        settingsWindow_->setPythonArgs(
+            settings.value("pythonArgs", "").toString());
+        settingsWindow_->setJavaCompilerPath(
+            settings.value("javaCompilerPath", "javac").toString());
+        settingsWindow_->setJavaRunPath(
+            settings.value("javaRunPath", "java").toString());
+        settingsWindow_->setJavaArgs(
+            settings.value("javaArgs", "").toString());
     }
 
     if (settingsButton_) {
         settingsButton_->setChecked(true);
+        settingsButton_->setActiveState(true);
     }
     settingsWindow_->show();
     settingsWindow_->raise();
@@ -617,12 +751,13 @@ void MainWindow::setupMainEditor() {
             item->setData(static_cast<int>(mode), Qt::UserRole);
             item->setEditable(false);
             cpackModel_->appendRow(item);
+            return item;
         };
 
         addCpackItem("solution.cpp", EditorMode::Solution);
         addCpackItem("brute.cpp", EditorMode::Brute);
         addCpackItem("generator.cpp", EditorMode::Generator);
-        addCpackItem("template.cpp", EditorMode::Template);
+        cpackTemplateItem_ = addCpackItem("template.cpp", EditorMode::Template);
         addCpackItem("problem.json", EditorMode::Problem);
         addCpackItem("testcases.json", EditorMode::Testcases);
 
@@ -637,6 +772,9 @@ void MainWindow::setupMainEditor() {
                     return;
                 }
                 const auto mode = static_cast<EditorMode>(data.toInt());
+                if (mode == EditorMode::Template && !transcludeTemplateEnabled_) {
+                    return;
+                }
                 setEditorMode(mode);
             });
         }
@@ -778,6 +916,7 @@ void MainWindow::setupMainEditor() {
         const auto stressWidgets = stressBuilder.build(sideStack_, themeManager_.textColor());
         stressTestPanel_ = stressWidgets.panel;
         stressStatusLabel_ = stressWidgets.statusLabel;
+        stressComplexityLabel_ = stressWidgets.complexityLabel;
         stressRunButton_ = stressWidgets.runButton;
         stressCountEdit_ = stressWidgets.countEdit;
         stressLog_ = stressWidgets.log;
@@ -787,6 +926,7 @@ void MainWindow::setupMainEditor() {
     sideStack_->setCurrentWidget(testPanelWidgets_.panel);
 
     updateEditorModeButtons();
+    updateTemplateAvailability();
 
     if (stressRunButton_) {
         connect(stressRunButton_, &QPushButton::clicked,
@@ -953,6 +1093,7 @@ void MainWindow::setupMenuBar() {
     templateButton->setFixedSize(28, 24);
     templateButton->setFocusPolicy(Qt::NoFocus);
     cornerLayout->addWidget(templateButton);
+    menuTemplateButton_ = templateButton;
 
     auto *copySolutionButton = new QPushButton(menuCorner);
     copySolutionButton->setObjectName("MenuCopyButton");
@@ -1211,6 +1352,9 @@ QString MainWindow::buildTestcasesJson() const {
 }
 
 void MainWindow::setEditorMode(EditorMode mode) {
+    if (mode == EditorMode::Template && !transcludeTemplateEnabled_) {
+        return;
+    }
     if (editorMode_ != mode) {
         syncEditorToMode();
         editorMode_ = mode;
@@ -1333,6 +1477,18 @@ void MainWindow::updateActivityBarActiveStates(bool collapsed) {
     }
     if (templateButton_) {
         templateButton_->setActiveState(false);
+    }
+}
+
+void MainWindow::updateTemplateAvailability() {
+    if (cpackTemplateItem_) {
+        if (cpackTree_) {
+            const int row = cpackTemplateItem_->row();
+            cpackTree_->setRowHidden(row, QModelIndex(), !transcludeTemplateEnabled_);
+        }
+    }
+    if (!transcludeTemplateEnabled_ && editorMode_ == EditorMode::Template) {
+        setEditorMode(EditorMode::Solution);
     }
 }
 
@@ -1554,6 +1710,10 @@ void MainWindow::runStressTest() {
             stressStatusLabel_->setText("Missing code");
             stressStatusLabel_->setStyleSheet("color: #c42b1c; font-weight: 700;");
         }
+        if (stressComplexityLabel_) {
+            stressComplexityLabel_->setText("Suspected: insufficient timing data");
+            stressComplexityLabel_->setVisible(true);
+        }
         if (stressLog_) {
             stressLog_->setPlainText(
                 "Please provide solution.cpp, brute.cpp, and generator.cpp before running stress test.");
@@ -1570,6 +1730,16 @@ void MainWindow::runStressTest() {
             }
 
             const StressResult result = stressWatcher_->result();
+            if (stressComplexityLabel_) {
+                if (!result.complexity.isEmpty()) {
+                    stressComplexityLabel_->setText(result.complexity);
+                    stressComplexityLabel_->setVisible(true);
+                } else {
+                    stressComplexityLabel_->setVisible(false);
+                    stressComplexityLabel_->clear();
+                }
+            }
+
             if (!result.error.isEmpty()) {
                 if (stressStatusLabel_) {
                     stressStatusLabel_->setText("Error");
@@ -1586,11 +1756,17 @@ void MainWindow::runStressTest() {
                     stressStatusLabel_->setText("Passed");
                     stressStatusLabel_->setStyleSheet("color: #2e7d32; font-weight: 700;");
                 }
+                if (stressComplexityLabel_) {
+                    if (!result.complexity.isEmpty()) {
+                        stressComplexityLabel_->setText(result.complexity);
+                        stressComplexityLabel_->setVisible(true);
+                    } else {
+                        stressComplexityLabel_->setVisible(false);
+                        stressComplexityLabel_->clear();
+                    }
+                }
                 if (stressLog_) {
                     QString summary = QString("All %1 testcases passed.").arg(result.totalCount);
-                    if (!result.complexity.isEmpty()) {
-                        summary.append("\n").append(result.complexity);
-                    }
                     stressLog_->setPlainText(summary);
                 }
                 return;
@@ -1629,6 +1805,10 @@ void MainWindow::runStressTest() {
     if (stressLog_) {
         stressLog_->setPlainText(QString("Running %1 testcases...").arg(count));
     }
+    if (stressComplexityLabel_) {
+        stressComplexityLabel_->setVisible(false);
+        stressComplexityLabel_->clear();
+    }
 
     const int timeoutMs = currentTimeout_ * 1000;
     const QString solutionCopy = solution;
@@ -1660,6 +1840,7 @@ MainWindow::StressResult MainWindow::runStressTestWorker(int count,
     QTemporaryDir tempDir;
     if (!tempDir.isValid()) {
         result.error = "Failed to create temporary directory for stress testing.";
+        result.complexity = QString("Suspected: insufficient timing data");
         return result;
     }
 
@@ -1719,14 +1900,17 @@ MainWindow::StressResult MainWindow::runStressTestWorker(int count,
     QString compileError;
     if (!compileSource(generatorCode, "generator.cpp", "generator", &compileError)) {
         result.error = QString("Generator compile error:\n%1").arg(compileError);
+        result.complexity = QString("Suspected: insufficient timing data");
         return result;
     }
     if (!compileSource(bruteCode, "brute.cpp", "brute", &compileError)) {
         result.error = QString("Brute compile error:\n%1").arg(compileError);
+        result.complexity = QString("Suspected: insufficient timing data");
         return result;
     }
     if (!compileSource(solutionCode, "solution.cpp", "solution", &compileError)) {
         result.error = QString("Solution compile error:\n%1").arg(compileError);
+        result.complexity = QString("Suspected: insufficient timing data");
         return result;
     }
 
@@ -1806,6 +1990,7 @@ MainWindow::StressResult MainWindow::runStressTestWorker(int count,
             if (!stderrOut.isEmpty()) {
                 result.stderrOutput = stderrOut;
             }
+            result.complexity = QString("Suspected: insufficient timing data");
             return result;
         }
 
@@ -1829,6 +2014,7 @@ MainWindow::StressResult MainWindow::runStressTestWorker(int count,
                 if (!bruteErr.isEmpty()) {
                     result.stderrOutput = bruteErr;
                 }
+                result.complexity = suspectedComplexityLabel(inputSizes, solutionTimes);
                 return result;
             }
 
@@ -1842,6 +2028,7 @@ MainWindow::StressResult MainWindow::runStressTestWorker(int count,
                 if (!solutionErr.isEmpty()) {
                     result.stderrOutput = solutionErr;
                 }
+                result.complexity = suspectedComplexityLabel(inputSizes, solutionTimes);
                 return result;
             }
 
@@ -1862,6 +2049,7 @@ MainWindow::StressResult MainWindow::runStressTestWorker(int count,
                 } else if (!bruteErr.isEmpty()) {
                     result.stderrOutput = bruteErr;
                 }
+                result.complexity = suspectedComplexityLabel(inputSizes, solutionTimes);
                 return result;
             }
         }
@@ -1958,12 +2146,13 @@ MainWindow::StressResult MainWindow::runStressTestWorker(int count,
             result.expected = failure.expected;
             result.actual = failure.actual;
             result.stderrOutput = failure.stderrOutput;
+            result.complexity = suspectedComplexityLabel(inputSizes, solutionTimes);
             return result;
         }
     }
 
     result.passed = true;
-    result.complexity = estimateComplexityLabel(inputSizes, solutionTimes);
+    result.complexity = suspectedComplexityLabel(inputSizes, solutionTimes);
     return result;
 }
 

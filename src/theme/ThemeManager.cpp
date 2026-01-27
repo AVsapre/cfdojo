@@ -21,6 +21,37 @@ QColor lightenColor(const QColor &color, int percent) {
 QColor darkenColor(const QColor &color, int percent) {
     return color.darker(100 + percent);
 }
+
+struct ButtonPalette {
+    QColor base;
+    QColor hover;
+    QColor pressed;
+};
+
+ButtonPalette makeButtonPalette(const QColor &base, int hoverDelta = 10, int pressedDelta = 12) {
+    return {base, lightenColor(base, hoverDelta), darkenColor(base, pressedDelta)};
+}
+
+void applyButtonPalette(QString &style,
+                        const QString &token,
+                        const QColor &base,
+                        int hoverDelta = 10,
+                        int pressedDelta = 12) {
+    const ButtonPalette palette = makeButtonPalette(base, hoverDelta, pressedDelta);
+    style.replace(QString("@%1@").arg(token), palette.base.name());
+    style.replace(QString("@%1Hover@").arg(token), palette.hover.name());
+    style.replace(QString("@%1Pressed@").arg(token), palette.pressed.name());
+}
+
+void applyHoverPressed(QString &style,
+                       const QString &token,
+                       const QColor &base,
+                       int hoverDelta = 10,
+                       int pressedDelta = 12) {
+    const ButtonPalette palette = makeButtonPalette(base, hoverDelta, pressedDelta);
+    style.replace(QString("@%1Hover@").arg(token), palette.hover.name());
+    style.replace(QString("@%1Pressed@").arg(token), palette.pressed.name());
+}
 } // namespace
 
 void ThemeManager::apply(QApplication *app, double scale) const {
@@ -51,39 +82,16 @@ void ThemeManager::apply(QApplication *app, double scale) const {
     // Isoluminant blue (H: 210°, S: 75%, L: 44%)
     const QColor infoBase("#2176ae");
 
-    const QColor bgHover = lightenColor(colors_.background, 10);
-    const QColor bgPressed = darkenColor(colors_.background, 8);
+    applyHoverPressed(style, "bg", colors_.background, 10, 12);
 
-    const QColor primaryHover = lightenColor(primaryBase, 10);
-    const QColor primaryPressed = darkenColor(primaryBase, 12);
-
-    const QColor successHover = lightenColor(successBase, 10);
-    const QColor successPressed = darkenColor(successBase, 12);
-
-    const QColor dangerHover = lightenColor(dangerBase, 10);
-    const QColor dangerPressed = darkenColor(dangerBase, 12);
-
-    const QColor infoHover = lightenColor(infoBase, 10);
-    const QColor infoPressed = darkenColor(infoBase, 12);
-
-    style.replace("@bgHover@", bgHover.name());
-    style.replace("@bgPressed@", bgPressed.name());
-
-    style.replace("@primary@", primaryBase.name());
-    style.replace("@primaryHover@", primaryHover.name());
-    style.replace("@primaryPressed@", primaryPressed.name());
-
-    style.replace("@success@", successBase.name());
-    style.replace("@successHover@", successHover.name());
-    style.replace("@successPressed@", successPressed.name());
-
-    style.replace("@danger@", dangerBase.name());
-    style.replace("@dangerHover@", dangerHover.name());
-    style.replace("@dangerPressed@", dangerPressed.name());
-
-    style.replace("@info@", infoBase.name());
-    style.replace("@infoHover@", infoHover.name());
-    style.replace("@infoPressed@", infoPressed.name());
+    applyButtonPalette(style, "primary", primaryBase);
+    applyButtonPalette(style, "success", successBase);
+    applyButtonPalette(style, "danger", dangerBase);
+    applyButtonPalette(style, "info", infoBase);
+    applyButtonPalette(style, "greenbutton", successBase);
+    applyButtonPalette(style, "redbutton", dangerBase);
+    applyButtonPalette(style, "bluebutton", infoBase);
+    applyButtonPalette(style, "yellowbutton", QColor("#f2d13b"));
     
     // Apply zoom overrides
     style.append(generateZoomOverrides(scale));

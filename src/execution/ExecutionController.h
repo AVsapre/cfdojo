@@ -51,6 +51,8 @@ public:
     // Set template for transclusion (//#main is replaced with solution code)
     void setTemplate(const QString &tmpl) { template_ = tmpl; }
     QString getTemplate() const { return template_; }
+    void setTranscludeTemplateEnabled(bool enabled) { transcludeTemplate_ = enabled; }
+    bool isTranscludeTemplateEnabled() const { return transcludeTemplate_; }
     void setTimeoutMs(int ms) { timeoutMs_ = ms; }
     
     // Apply transclusion: replace //#main with solution code
@@ -94,4 +96,5 @@ private:
     int timeoutMs_ = 5000;
     bool timedOut_ = false;
     QColor iconColor_ = QColor("#d4d4d4");
+    bool transcludeTemplate_ = false;
 };

@@ -86,6 +86,13 @@ StressPanelBuilder::Widgets StressPanelBuilder::build(QWidget *parent,
 
     layout->addWidget(controls);
 
+    auto *complexityLabel = new QLabel(panel);
+    complexityLabel->setObjectName("StressComplexityLabel");
+    complexityLabel->setVisible(false);
+    complexityLabel->setWordWrap(true);
+    complexityLabel->setContentsMargins(12, 0, 12, 0);
+    layout->addWidget(complexityLabel);
+
     auto *log = new QPlainTextEdit(panel);
     log->setObjectName("StressLog");
     log->setReadOnly(true);
@@ -94,6 +101,7 @@ StressPanelBuilder::Widgets StressPanelBuilder::build(QWidget *parent,
 
     widgets.panel = panel;
     widgets.statusLabel = statusLabel;
+    widgets.complexityLabel = complexityLabel;
     widgets.runButton = runButton;
     widgets.countEdit = countEdit;
     widgets.log = log;

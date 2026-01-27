@@ -500,6 +500,9 @@ void ExecutionController::updateOutputPanels(bool showOutput, bool showError) {
 }
 
 QString ExecutionController::applyTransclusion(const QString &solution) const {
+    if (!transcludeTemplate_) {
+        return solution;
+    }
     // Replace //#main with the solution code
     QString result = template_;
     
