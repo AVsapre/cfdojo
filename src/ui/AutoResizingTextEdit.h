@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QPlainTextEdit>
+#include <QSize>
 #include <QString>
 
 class AutoResizingTextEdit : public QPlainTextEdit {
@@ -21,12 +22,15 @@ public:
 protected:
     void changeEvent(QEvent *event) override;
     void resizeEvent(QResizeEvent *event) override;
+    QSize sizeHint() const override;
+    QSize minimumSizeHint() const override;
 
 private slots:
     void adjustHeight();
 
 private:
     int calculateHeight(int lines) const;
+    int targetLineCount() const;
     void updateElidedPlaceholder();
     QString elideWithDots(const QString &text, int maxWidth) const;
 

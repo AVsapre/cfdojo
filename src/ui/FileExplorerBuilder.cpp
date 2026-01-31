@@ -34,6 +34,10 @@ FileExplorerBuilder::Widgets FileExplorerBuilder::build(QWidget *parent,
     tree->setHeaderHidden(true);
     tree->setAnimated(true);
     tree->setIndentation(12);
+    tree->setMouseTracking(true);
+    if (tree->viewport()) {
+        tree->viewport()->setMouseTracking(true);
+    }
     tree->setEditTriggers(QAbstractItemView::NoEditTriggers);
     tree->setSelectionBehavior(QAbstractItemView::SelectRows);
     tree->setSelectionMode(QAbstractItemView::SingleSelection);

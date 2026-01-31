@@ -1,11 +1,9 @@
 #include "app/LandingButton.h"
 
-#include <QEnterEvent>
+#include <QEvent>
 #include <QLabel>
-#include <QMouseEvent>
 #include <QPainter>
 #include <QPalette>
-#include <QStyle>
 #include <QVBoxLayout>
 
 namespace {
@@ -28,8 +26,10 @@ QPixmap tintPixmap(const QPixmap &source, const QColor &color) {
 
 LandingButton::LandingButton(const QString &text, const QString &iconPath,
                              QWidget *parent)
-    : QWidget(parent), baseIcon_(iconPath) {
+    : QPushButton(parent), baseIcon_(iconPath) {
     setAttribute(Qt::WA_StyledBackground, true);
+    setAttribute(Qt::WA_Hover, true);
+    setMouseTracking(true);
     setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
     setCursor(Qt::PointingHandCursor);
 
@@ -37,64 +37,28 @@ LandingButton::LandingButton(const QString &text, const QString &iconPath,
     layout->setContentsMargins(0, 0, 0, 0);
     layout->setSpacing(14);
 
-    // Spacer pushes content to center
     layout->addStretch(1);
 
     iconLabel_ = new QLabel(this);
     iconLabel_->setAlignment(Qt::AlignCenter);
     iconLabel_->setFixedSize(kIconSize, kIconSize);
+    iconLabel_->setAttribute(Qt::WA_TransparentForMouseEvents, true);
     layout->addWidget(iconLabel_, 0, Qt::AlignCenter);
 
     textLabel_ = new QLabel(text, this);
     textLabel_->setObjectName("LandingButtonText");
     textLabel_->setAlignment(Qt::AlignCenter);
+    textLabel_->setAttribute(Qt::WA_TransparentForMouseEvents, true);
     layout->addWidget(textLabel_, 0, Qt::AlignCenter);
 
-    // Spacer pushes content to center
     layout->addStretch(1);
-
     updateIcon();
 }
 
-void LandingButton::mousePressEvent(QMouseEvent *event) {
-    if (event->button() == Qt::LeftButton) {
-        pressed_ = true;
-        style()->polish(this);
-        update();
-    }
-    QWidget::mousePressEvent(event);
-}
-
-void LandingButton::mouseReleaseEvent(QMouseEvent *event) {
-    if (event->button() == Qt::LeftButton && pressed_) {
-        pressed_ = false;
-        style()->polish(this);
-        update();
-        if (rect().contains(event->pos())) {
-            emit clicked();
-        }
-    }
-    QWidget::mouseReleaseEvent(event);
-}
-
-void LandingButton::enterEvent(QEnterEvent *event) {
-    hovered_ = true;
-    style()->polish(this);
-    update();
-    QWidget::enterEvent(event);
-}
-
-void LandingButton::leaveEvent(QEvent *event) {
-    hovered_ = false;
-    pressed_ = false;
-    style()->polish(this);
-    update();
-    QWidget::leaveEvent(event);
-}
-
 void LandingButton::changeEvent(QEvent *event) {
-    QWidget::changeEvent(event);
-    if (event->type() == QEvent::PaletteChange) {
+    QPushButton::changeEvent(event);
+    if (event->type() == QEvent::PaletteChange ||
+        event->type() == QEvent::StyleChange) {
         cachedTint_ = QColor();  // Force refresh
         updateIcon();
     }
@@ -110,5 +74,7 @@ void LandingButton::updateIcon() {
     const qreal dpr = devicePixelRatioF();
     QPixmap base = baseIcon_.pixmap(QSize(kIconSize, kIconSize) * dpr);
     base.setDevicePixelRatio(dpr);
-    iconLabel_->setPixmap(tintPixmap(base, color));
+    if (iconLabel_) {
+        iconLabel_->setPixmap(tintPixmap(base, color));
+    }
 }

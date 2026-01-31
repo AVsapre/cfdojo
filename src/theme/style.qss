@@ -2,6 +2,10 @@
 QMainWindow {
     background-color: @background@;
 }
+QDialog,
+QMessageBox {
+    background-color: @background@;
+}
 QWidget {
     color: @textcolor@;
     font-family: "@appfont@";
@@ -157,66 +161,41 @@ QLabel#FileExplorerTitle {
     font-weight: normal;
 }
 
-/* FILE EXPLORER */
-QTreeView#FileExplorerTree {
-    background-color: @background@;
-    color: @textcolor@;
-    font-weight: normal;
-    font-size: 12px;
-    padding: 0px;
-    border-left: none;
-    border-top: none;
-    border-bottom: none;
-    border-right: none;
-    outline: none;
-}
-QTreeView#FileExplorerTree::viewport {
-    background-color: transparent;
-}
-QTreeView#FileExplorerTree::item {
-    padding: 2px 0px;
-}
-QTreeView#FileExplorerTree::item:selected {
-    background-color: @edgecolor@;
-    color: @textcolor@;
-}
-QTreeView#FileExplorerTree::item:focus {
-    background-color: @edgecolor@;
-    color: @textcolor@;
-    outline: none;
-}
-QTreeView#FileExplorerTree:focus {
-    outline: none;
-    border: none;
-}
-
+/* FILE BROWSERS */
+QTreeView#FileExplorerTree,
 QTreeView#CpackTree {
     background-color: @background@;
     color: @textcolor@;
     font-weight: normal;
     font-size: 12px;
     padding: 0px;
-    border-left: none;
-    border-top: none;
-    border-bottom: none;
-    border-right: none;
+    border: none;
     outline: none;
 }
+QTreeView#FileExplorerTree::viewport,
 QTreeView#CpackTree::viewport {
-    background-color: transparent;
+    background-color: @background@;
 }
+QTreeView#FileExplorerTree::item,
 QTreeView#CpackTree::item {
-    padding: 2px 0px;
+    padding: 2px 6px;
 }
+QTreeView#FileExplorerTree::item:hover,
+QTreeView#CpackTree::item:hover {
+    background-color: @bgHover@;
+}
+QTreeView#FileExplorerTree::item:selected,
 QTreeView#CpackTree::item:selected {
     background-color: @edgecolor@;
     color: @textcolor@;
 }
+QTreeView#FileExplorerTree::item:focus,
 QTreeView#CpackTree::item:focus {
     background-color: @edgecolor@;
     color: @textcolor@;
     outline: none;
 }
+QTreeView#FileExplorerTree:focus,
 QTreeView#CpackTree:focus {
     outline: none;
     border: none;
@@ -224,6 +203,36 @@ QTreeView#CpackTree:focus {
 
 QSplitter::handle {
     background-color: @background@;
+}
+
+/* TRAINER WINDOW */
+QWidget#TrainerContent {
+    background-color: @background@;
+}
+
+QTreeWidget#DrillList,
+QListWidget#RecommendationsList {
+    background-color: @background@;
+    border: 1px solid @edgecolor@;
+    font-size: 12px;
+}
+
+QTreeWidget#DrillList::item,
+QListWidget#RecommendationsList::item {
+    padding: 3px 6px;
+}
+
+QTreeWidget#DrillList::item:selected,
+QListWidget#RecommendationsList::item:selected {
+    background-color: @edgecolor@;
+    color: @textcolor@;
+}
+
+QTreeWidget#DrillList QHeaderView::section {
+    background-color: @background@;
+    color: @textcolor@;
+    border: none;
+    padding: 4px 6px;
 }
 
 /* EDITORS (Input & Code) */
@@ -513,6 +522,7 @@ QMenuBar QPushButton#MenuRunAllButton,
 QMenuBar QPushButton#MenuTemplateButton {
     background-color: transparent;
     border: 1px solid transparent;
+    border-bottom: 1px solid @edgecolor@;
     padding: 2px;
 }
 
@@ -520,12 +530,19 @@ QMenuBar QPushButton#MenuCopyButton:hover,
 QMenuBar QPushButton#MenuRunAllButton:hover,
 QMenuBar QPushButton#MenuTemplateButton:hover {
     background-color: @edgecolor@;
+    border-bottom: 1px solid @edgecolor@;
+}
+
+QMenuBar QPushButton#MenuTemplateButton:checked {
+    background-color: @edgecolor@;
+    border-bottom: 1px solid @edgecolor@;
 }
 
 QMenuBar QPushButton#MenuCopyButton:pressed,
 QMenuBar QPushButton#MenuRunAllButton:pressed,
 QMenuBar QPushButton#MenuTemplateButton:pressed {
     background-color: @edgecolor@;
+    border-bottom: 1px solid @edgecolor@;
 }
 
 QWidget#CopyToast {
@@ -542,13 +559,12 @@ QMenu {
 }
 
 QMenu::item {
-    padding: 6px 18px;
-    padding-left: 36px;
+    padding: 6px 12px;
     color: @textcolor@;
 }
 
 QMenu::icon {
-    left: 12px;
+    left: 8px;
 }
 
 QMenu::item:selected {
@@ -638,4 +654,27 @@ QSpinBox::up-button, QSpinBox::down-button {
 
 QSpinBox::up-button:hover, QSpinBox::down-button:hover {
     background-color: @bgPressed@;
+}
+
+QLabel#PanelSubtitle {
+    color: @textcolor@;
+    font-weight: 700;
+}
+
+QWidget#PlainTextBanner {
+    background-color: @background@;
+    border-bottom: 1px solid @edgecolor@;
+}
+
+QWidget#PlainTextBanner QLabel {
+    color: @textcolor@;
+}
+
+QWidget#PlainTextBanner QPushButton {
+    padding: 4px 10px;
+}
+
+QLabel#TestMetaLabel {
+    color: @textcolor@;
+    font-weight: 600;
 }

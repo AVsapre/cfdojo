@@ -8,6 +8,7 @@
 
 #include <QMainWindow>
 #include <QFont>
+#include <QPointer>
 #include <QString>
 #include <QJsonObject>
 #include <deque>
@@ -22,7 +23,6 @@ class QFileSystemModel;
 class QTreeView;
 class ActivityBarButton;
 class CollapsibleSplitter;
-class LandingButton;
 class CompanionListener;
 class SettingsDialog;
 class QPushButton;
@@ -32,6 +32,9 @@ class QPlainTextEdit;
 class QLineEdit;
 class QStandardItemModel;
 class QStandardItem;
+class QCloseEvent;
+class QShowEvent;
+class CpackFileHandler;
 template <typename T>
 class QFutureWatcher;
 
@@ -46,6 +49,12 @@ class MainWindow : public QMainWindow {
 public:
     explicit MainWindow(QWidget *parent = nullptr);
     ~MainWindow() override;
+    void setBaseWindowTitle(const QString &title);
+    void startPlainTextSession(const QString &title);
+
+protected:
+    void closeEvent(QCloseEvent *event) override;
+    void showEvent(QShowEvent *event) override;
 
 private slots:
     void zoomIn();
@@ -83,15 +92,20 @@ private:
 
     void setupUi();
     void setupActivityBar();
-    void setupLandingPage();
     void setupMainEditor();
     void setupMenuBar();
+    void openHelpDialog();
+    void openAboutDialog();
     void setupZoomShortcuts();
     void setupCompanionListener();
     void applyUiZoom();
     void showCopyToast();
     void markDirty();
     void setDirty(bool dirty);
+    void saveFileAsWithTitle(const QString &title);
+    void openPlainFileWithPrompt(const QString &path);
+    void populateCpackTree();
+    void setPlainTextMode(bool enabled);
     void runStressTest();
     StressResult runStressTestWorker(int count,
                                      const QString &solution,
@@ -119,10 +133,26 @@ private:
     void syncEditorToMode();
     void updateEditorModeButtons();
     void updateWindowTitle();
+    void updateProblemMetaUi();
+    bool confirmDiscardUnsaved(const QString &actionLabel);
+    void setupAutosave();
+    void scheduleAutosave();
+    void performAutosave();
+    void clearAutosaveFiles();
+    void checkForRecovery();
+    QString autosaveDir() const;
+    QString autosaveCpackPath() const;
+    QString autosaveMetaPath() const;
+    QString autosaveSessionPath() const;
+    void loadCpackFromHandler(const CpackFileHandler &handler,
+                              const QString &path,
+                              bool markSavedFile);
     QString buildProblemJson() const;
     QString buildTestcasesJson() const;
     void updateActivityBarActiveStates(bool collapsed);
     void updateTemplateAvailability();
+    void updateTemplateMarkerVisibility();
+    void syncTemplateToggleUi();
 
     // Core managers
     ThemeManager themeManager_;
@@ -132,7 +162,6 @@ private:
     ParallelExecutor *parallelExecutor_;
 
     // Main layout
-    QStackedWidget *mainStack_ = nullptr;
     CollapsibleSplitter *mainSplitter_ = nullptr;
 
     // Activity bar
@@ -144,11 +173,10 @@ private:
     ActivityBarButton *settingsButton_ = nullptr;
     ActivityBarButton *backButton_ = nullptr;
     QPushButton *menuTemplateButton_ = nullptr;
-
-    // Landing page
-    QWidget *landingPage_ = nullptr;
-    LandingButton *trainingButton_ = nullptr;
-    LandingButton *contestButton_ = nullptr;
+    QPushButton *menuRunAllButton_ = nullptr;
+    QWidget *plainTextBanner_ = nullptr;
+    QLabel *plainTextBannerLabel_ = nullptr;
+    QPushButton *plainTextConvertButton_ = nullptr;
 
     // Editor area
     QWidget *sidePanel_ = nullptr;
@@ -179,9 +207,12 @@ private:
     QMenuBar *menuBar_ = nullptr;
     QMenu *fileMenu_ = nullptr;
     QMenu *editMenu_ = nullptr;
+    QMenu *helpMenu_ = nullptr;
     QWidget *copyToast_ = nullptr;
     QLabel *copyToastLabel_ = nullptr;
     QTimer *copyToastTimer_ = nullptr;
+    QTimer *autosaveTimer_ = nullptr;
+    bool recoveryChecked_ = false;
 
     // Zoom
     double uiScale_ = 1.0;
@@ -199,18 +230,14 @@ private:
     QString currentSolutionCode_;
     QString baseWindowTitle_ = "CF Dojo - v1.0";
 
-    // Optional additional sources stored in .cpack
+    // Active problem state
     QString currentBruteCode_;
     QString currentGeneratorCode_;
     QString currentProblemRaw_;
     QString currentTestcasesRaw_;
     bool problemEdited_ = false;
     bool testcasesEdited_ = false;
-    
-    // Template with //#main transclusion marker (default is just //#main)
     QString currentTemplate_ = "//#main";
-    
-    // Execution timeout in seconds (per-problem setting)
     int currentTimeout_ = 5;
     
     // Competitive Companion
@@ -218,16 +245,19 @@ private:
     QJsonObject currentProblem_;
     
     // Settings window
-    SettingsDialog *settingsWindow_ = nullptr;
+    QPointer<SettingsDialog> settingsWindow_;
     
     // Experimental settings
     bool multithreadingEnabled_ = false;
     bool transcludeTemplateEnabled_ = false;
+    int autosaveIntervalMs_ = 15000;
 
     // Dirty state
     bool isDirty_ = false;
     int dirtySuppressionDepth_ = 0;
     bool hasSavedFile_ = false;
+    bool plainTextMode_ = false;
+    bool wasSidePanelCollapsed_ = false;
 
     // Sequential run-all state
     std::deque<int> runAllQueue_;

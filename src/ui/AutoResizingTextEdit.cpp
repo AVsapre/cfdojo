@@ -58,6 +58,19 @@ void AutoResizingTextEdit::resizeEvent(QResizeEvent *event) {
     }
 }
 
+QSize AutoResizingTextEdit::sizeHint() const {
+    const int lines = targetLineCount();
+    QSize hint = QPlainTextEdit::sizeHint();
+    hint.setHeight(calculateHeight(lines));
+    return hint;
+}
+
+QSize AutoResizingTextEdit::minimumSizeHint() const {
+    QSize hint = QPlainTextEdit::minimumSizeHint();
+    hint.setHeight(calculateHeight(minLines_));
+    return hint;
+}
+
 int AutoResizingTextEdit::calculateHeight(int lines) const {
     const int lineHeight = QFontMetrics(font()).lineSpacing();
     const int frame = frameWidth();
@@ -66,23 +79,32 @@ int AutoResizingTextEdit::calculateHeight(int lines) const {
     return (lineHeight * lines) + verticalPadding;
 }
 
+int AutoResizingTextEdit::targetLineCount() const {
+    if (maxLines_ <= 0) {
+        return minLines_;
+    }
+
+    const int clampedMaxLines = std::max(maxLines_, minLines_);
+    const int docLines = document()->blockCount();
+    return std::clamp(docLines, minLines_, clampedMaxLines);
+}
+
 void AutoResizingTextEdit::adjustHeight() {
     const int minHeight = calculateHeight(minLines_);
     setMinimumHeight(minHeight);
 
     if (maxLines_ <= 0) {
-        // No auto-resize, just set minimum
-        setFixedHeight(minHeight);
+        setMaximumHeight(QWIDGETSIZE_MAX);
         setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
+        updateGeometry();
         return;
     }
 
     const int clampedMaxLines = std::max(maxLines_, minLines_);
+    const int maxHeight = calculateHeight(clampedMaxLines);
+    setMaximumHeight(maxHeight);
+
     const int docLines = document()->blockCount();
-    const int clampedLines = std::clamp(docLines, minLines_, clampedMaxLines);
-    
-    setFixedHeight(calculateHeight(clampedLines));
-    
     if (docLines > clampedMaxLines) {
         setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
     } else {

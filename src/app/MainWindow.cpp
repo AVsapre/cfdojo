@@ -1,7 +1,6 @@
 #include "app/MainWindow.h"
 #include "app/ActivityBarButton.h"
 #include "app/CollapsibleSplitter.h"
-#include "app/LandingButton.h"
 #include "app/SettingsDialog.h"
 #include "companion/CompanionListener.h"
 #include "file/CpackFileHandler.h"
@@ -14,12 +13,15 @@
 #include <QAction>
 #include <QApplication>
 #include <QClipboard>
+#include <QCloseEvent>
+#include <QDateTime>
+#include <QDialog>
 #include <QFileDialog>
+#include <QFileInfo>
+#include <QGuiApplication>
 #include <QHBoxLayout>
 #include <QFileSystemModel>
-#include <QFileInfo>
 #include <QTreeView>
-#include <QDir>
 #include <QFile>
 #include <QIcon>
 #include <QElapsedTimer>
@@ -37,8 +39,14 @@
 #include <QRegularExpression>
 #include <QSettings>
 #include <QShortcut>
+#include <QScrollArea>
 #include <QStandardItem>
 #include <QStandardItemModel>
+#include <QStandardPaths>
+#include <QDir>
+#include <QScreen>
+#include <QWindow>
+#include <QShowEvent>
 #include <QStringConverter>
 #include <QSizePolicy>
 #include <QStackedWidget>
@@ -59,10 +67,12 @@ namespace {
 constexpr int kActivityBarWidth = 50;
 constexpr int kSidePanelDefaultWidth = 240;
 constexpr int kSidePanelMinWidth = 175;
+const QString kTemplateMarker = QStringLiteral("//#main");
+
 QString loadDefaultTemplate() {
     QSettings settings("CF Dojo", "CF Dojo");
     const QString stored = settings.value("defaultTemplate").toString();
-    return stored.isEmpty() ? QString("//#main") : stored;
+    return stored.isEmpty() ? kTemplateMarker : stored;
 }
 
 struct RegressionResult {
@@ -203,6 +213,9 @@ MainWindow::MainWindow(QWidget *parent)
     currentTemplate_ = loadDefaultTemplate();
     QSettings settings("CF Dojo", "CF Dojo");
     transcludeTemplateEnabled_ = settings.value("transcludeTemplate", false).toBool();
+    const int autosaveSec = std::clamp(
+        settings.value("autosaveIntervalSec", 15).toInt(), 5, 300);
+    autosaveIntervalMs_ = autosaveSec * 1000;
     executionController_->setTranscludeTemplateEnabled(transcludeTemplateEnabled_);
     themeManager_.apply(qApp, uiScale_);
     executionController_->setIconTintColor(themeManager_.textColor());
@@ -210,6 +223,7 @@ MainWindow::MainWindow(QWidget *parent)
     setupZoomShortcuts();
     setupCompanionListener();
     applyUiZoom();
+    setupAutosave();
     
     // Connect parallel executor signals
     connect(parallelExecutor_, &ParallelExecutor::testFinished,
@@ -271,6 +285,59 @@ MainWindow::MainWindow(QWidget *parent)
 
 MainWindow::~MainWindow() = default;
 
+void MainWindow::setBaseWindowTitle(const QString &title) {
+    baseWindowTitle_ = title;
+    updateWindowTitle();
+}
+
+void MainWindow::startPlainTextSession(const QString &title) {
+    DirtyScope guard(this);
+    if (codeEditor_) {
+        codeEditor_->clear();
+    }
+    currentFilePath_.clear();
+    hasSavedFile_ = false;
+    editorMode_ = EditorMode::Solution;
+    currentSolutionCode_.clear();
+    currentBruteCode_.clear();
+    currentGeneratorCode_.clear();
+    currentTemplate_ = loadDefaultTemplate();
+    currentProblem_ = QJsonObject();
+    currentProblemRaw_.clear();
+    currentTestcasesRaw_.clear();
+    problemEdited_ = false;
+    testcasesEdited_ = false;
+    currentTimeout_ = 5;
+    clearAllTestCases();
+    addTestCase();
+    setDirty(false);
+    setBaseWindowTitle(title.isEmpty() ? QString("CF Dojo - Training") : title);
+    setPlainTextMode(true);
+    updateProblemMetaUi();
+}
+
+void MainWindow::closeEvent(QCloseEvent *event) {
+    if (!confirmDiscardUnsaved("quitting")) {
+        event->ignore();
+        return;
+    }
+    if (autosaveTimer_) {
+        autosaveTimer_->stop();
+    }
+    clearAutosaveFiles();
+    QFile::remove(autosaveSessionPath());
+    QMainWindow::closeEvent(event);
+}
+
+void MainWindow::showEvent(QShowEvent *event) {
+    QMainWindow::showEvent(event);
+    if (recoveryChecked_) {
+        return;
+    }
+    recoveryChecked_ = true;
+    QTimer::singleShot(0, this, &MainWindow::checkForRecovery);
+}
+
 MainWindow::DirtyScope::DirtyScope(MainWindow *window)
     : window_(window) {
     if (window_) {
@@ -289,32 +356,9 @@ void MainWindow::setupUi() {
     baseWindowTitle_ = "CF Dojo - v1.0";
     updateWindowTitle();
 
-    // Build the stacked widget for page navigation
-    mainStack_ = new QStackedWidget(this);
-    mainStack_->setContentsMargins(0, 0, 0, 0);
-    mainStack_->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
-
-    setupLandingPage();
     setupMenuBar();
     setupMainEditor();
-
-    // Add pages to stack
-    mainStack_->addWidget(landingPage_);
-    mainStack_->addWidget(mainSplitter_);
-    mainStack_->setCurrentWidget(landingPage_);
-
-    // Menu visibility follows current page
-    connect(mainStack_, &QStackedWidget::currentChanged, this, [this]() {
-        if (menuBar_) {
-            menuBar_->setVisible(mainStack_->currentWidget() != landingPage_);
-        }
-        updateWindowTitle();
-    });
-    if (menuBar_) {
-        menuBar_->setVisible(false);
-    }
-
-    setCentralWidget(mainStack_);
+    setCentralWidget(mainSplitter_);
 }
 
 void MainWindow::setupActivityBar() {
@@ -420,7 +464,7 @@ void MainWindow::setupActivityBar() {
     templateButton_ = new ActivityBarButton(":/images/template.svg", activityBar_);
     templateButton_->setObjectName("TemplateButton");
     templateButton_->setFixedHeight(kActivityBarWidth);
-    templateButton_->setToolTip("Template");
+    templateButton_->setToolTip("Show template view");
     templateButton_->setCheckable(true);
     templateButton_->setChecked(false);
     applyActivityTint(templateButton_);
@@ -499,9 +543,7 @@ void MainWindow::setupActivityBar() {
     applyActivityTint(backButton_);
 
     connect(backButton_, &QPushButton::clicked, this, [this]() {
-        if (mainStack_ && landingPage_) {
-            mainStack_->setCurrentWidget(landingPage_);
-        }
+        close();
     });
 
     bottomLayout->addWidget(newFileButton_);
@@ -516,6 +558,7 @@ void MainWindow::setupActivityBar() {
     edgeLine->setFixedWidth(1);
     edgeLine->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Expanding);
     barLayout->addWidget(edgeLine);
+    syncTemplateToggleUi();
 }
 
 void MainWindow::openSettingsDialog() {
@@ -526,6 +569,8 @@ void MainWindow::openSettingsDialog() {
         settingsWindow_->setTranscludeTemplateEnabled(transcludeTemplateEnabled_);
         {
             QSettings settings("CF Dojo", "CF Dojo");
+            settingsWindow_->setAutosaveIntervalSeconds(
+                settings.value("autosaveIntervalSec", 15).toInt());
             settingsWindow_->setDefaultLanguage(
                 settings.value("defaultLanguage", "C++").toString());
             settingsWindow_->setCompilerPath(
@@ -572,6 +617,11 @@ void MainWindow::openSettingsDialog() {
             settings.setValue("transcludeTemplate", transcludeTemplateEnabled_);
             executionController_->setTranscludeTemplateEnabled(transcludeTemplateEnabled_);
             updateTemplateAvailability();
+            settings.setValue("autosaveIntervalSec", settingsWindow_->autosaveIntervalSeconds());
+            autosaveIntervalMs_ = settingsWindow_->autosaveIntervalSeconds() * 1000;
+            if (isDirty_) {
+                scheduleAutosave();
+            }
             settings.setValue("defaultLanguage", settingsWindow_->defaultLanguage());
             settings.setValue("cppCompilerPath", settingsWindow_->compilerPath());
             settings.setValue("cppCompilerFlags", settingsWindow_->compilerFlags());
@@ -597,6 +647,8 @@ void MainWindow::openSettingsDialog() {
         settingsWindow_->setMultithreadingEnabled(multithreadingEnabled_);
         settingsWindow_->setTranscludeTemplateEnabled(transcludeTemplateEnabled_);
         QSettings settings("CF Dojo", "CF Dojo");
+        settingsWindow_->setAutosaveIntervalSeconds(
+            settings.value("autosaveIntervalSec", 15).toInt());
         settingsWindow_->setDefaultLanguage(
             settings.value("defaultLanguage", "C++").toString());
         settingsWindow_->setCompilerPath(
@@ -624,37 +676,6 @@ void MainWindow::openSettingsDialog() {
     settingsWindow_->activateWindow();
 }
 
-void MainWindow::setupLandingPage() {
-    landingPage_ = new QWidget();
-    landingPage_->setObjectName("LandingPage");
-    landingPage_->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
-
-    auto *layout = new QHBoxLayout(landingPage_);
-    layout->setContentsMargins(0, 0, 0, 0);
-    layout->setSpacing(0);
-
-    trainingButton_ = new LandingButton("Training", ":/images/train.svg", landingPage_);
-    trainingButton_->setObjectName("TrainingChoice");
-
-    contestButton_ = new LandingButton("Contest", ":/images/battle.svg", landingPage_);
-    contestButton_->setObjectName("ContestChoice");
-
-    connect(trainingButton_, &LandingButton::clicked, this, [this]() {
-        if (mainStack_ && mainSplitter_) {
-            mainStack_->setCurrentWidget(mainSplitter_);
-        }
-    });
-
-    connect(contestButton_, &LandingButton::clicked, this, [this]() {
-        if (mainStack_ && mainSplitter_) {
-            mainStack_->setCurrentWidget(mainSplitter_);
-        }
-    });
-
-    layout->addWidget(trainingButton_, 1);
-    layout->addWidget(contestButton_, 1);
-}
-
 void MainWindow::setupMainEditor() {
     // Build editor and side panel
     const auto editorWidgets = editorConfigurator_->build(this, themeManager_);
@@ -662,6 +683,9 @@ void MainWindow::setupMainEditor() {
     if (codeEditor_) {
         connect(codeEditor_, &QsciScintilla::textChanged, this, [this]() {
             markDirty();
+            if (transcludeTemplateEnabled_ && editorMode_ == EditorMode::Template) {
+                updateTemplateMarkerVisibility();
+            }
         });
         codeEditor_->setContextMenuPolicy(Qt::CustomContextMenu);
         connect(codeEditor_, &QsciScintilla::customContextMenuRequested, this,
@@ -705,6 +729,7 @@ void MainWindow::setupMainEditor() {
     }
 
     testPanelWidgets_ = testPanelBuilder_.build(this, this, themeManager_.textColor());
+    updateProblemMetaUi();
 
     sideStack_ = new QStackedWidget();
     sideStack_->setObjectName("SidePanelStack");
@@ -781,10 +806,15 @@ void MainWindow::setupMainEditor() {
 
         cpackLayout->addWidget(cpackTree_);
         sideStack_->addWidget(cpackPanel_);
+
+        updateProblemMetaUi();
     }
 
     connect(fileTree_, &QTreeView::doubleClicked, this, [this](const QModelIndex &index) {
         if (!fileModel_ || !codeEditor_ || fileModel_->isDir(index)) {
+            return;
+        }
+        if (!confirmDiscardUnsaved("opening another file")) {
             return;
         }
         const QString filePath = fileModel_->filePath(index);
@@ -795,120 +825,10 @@ void MainWindow::setupMainEditor() {
                     "Failed to open file: " + handler.errorString());
                 return;
             }
-            DirtyScope guard(this);
-
-            // Load solution code (support legacy "solution.cpp")
-            currentSolutionCode_.clear();
-            if (handler.hasFile("soluiton.cpp")) {
-                currentSolutionCode_ = QString::fromUtf8(handler.getFile("soluiton.cpp"));
-            } else if (handler.hasFile("solution.cpp")) {
-                currentSolutionCode_ = QString::fromUtf8(handler.getFile("solution.cpp"));
-            }
-            if (codeEditor_) {
-                codeEditor_->setText(currentSolutionCode_);
-            }
-
-            // Load optional brute/generator sources
-            currentBruteCode_.clear();
-            currentGeneratorCode_.clear();
-            if (handler.hasFile("brute.cpp")) {
-                currentBruteCode_ = QString::fromUtf8(handler.getFile("brute.cpp"));
-            }
-            if (handler.hasFile("generator.cpp")) {
-                currentGeneratorCode_ = QString::fromUtf8(handler.getFile("generator.cpp"));
-            }
-            editorMode_ = EditorMode::Solution;
-            updateEditorModeButtons();
-            updateWindowTitle();
-
-            // Load template (default to //#main if not present)
-            if (handler.hasFile("template.cpp")) {
-                currentTemplate_ = QString::fromUtf8(handler.getFile("template.cpp"));
-            } else {
-                currentTemplate_ = loadDefaultTemplate();
-            }
-
-            // Load problem metadata
-            problemEdited_ = false;
-            if (handler.hasFile("problem.json")) {
-                const QByteArray problemBytes = handler.getFile("problem.json");
-                currentProblemRaw_ = QString::fromUtf8(problemBytes);
-                QJsonParseError parseError;
-                QJsonDocument problemDoc = QJsonDocument::fromJson(
-                    problemBytes, &parseError);
-                if (parseError.error == QJsonParseError::NoError) {
-                    currentProblem_ = problemDoc.object();
-                }
-            } else {
-                currentProblem_ = QJsonObject();
-                currentProblemRaw_.clear();
-            }
-
-            // Load test cases
-            testcasesEdited_ = false;
-            if (handler.hasFile("testcases.json")) {
-                const QByteArray testsBytes = handler.getFile("testcases.json");
-                currentTestcasesRaw_ = QString::fromUtf8(testsBytes);
-                QJsonParseError parseError;
-                QJsonDocument testsDoc = QJsonDocument::fromJson(
-                    testsBytes, &parseError);
-                if (parseError.error == QJsonParseError::NoError) {
-                    QJsonObject testsObj = testsDoc.object();
-                    QJsonArray testsArray = testsObj["tests"].toArray();
-
-                    // Load timeout if present
-                    if (testsObj.contains("timeout")) {
-                        currentTimeout_ = testsObj["timeout"].toInt(5);
-                    }
-
-                    // Clear existing test cases
-                    for (auto &widgets : caseWidgets_) {
-                        if (widgets.panel) {
-                            widgets.panel->deleteLater();
-                        }
-                    }
-                    caseWidgets_.clear();
-
-                    // Add loaded test cases
-                    for (const QJsonValue &testVal : testsArray) {
-                        QJsonObject test = testVal.toObject();
-                        addTestCase();
-                        if (!caseWidgets_.empty()) {
-                            auto &lastCase = caseWidgets_.back();
-                            if (lastCase.inputEditor) {
-                                lastCase.inputEditor->setPlainText(test["input"].toString());
-                            }
-                            if (lastCase.expectedEditor) {
-                                lastCase.expectedEditor->setPlainText(test["output"].toString());
-                            }
-                        }
-                    }
-                }
-            } else {
-                currentTestcasesRaw_.clear();
-            }
-
-            currentFilePath_ = filePath;
-            hasSavedFile_ = true;
-            setDirty(false);
-
-            // Switch to editor view
-            if (mainStack_ && mainStack_->count() > 1) {
-                mainStack_->setCurrentIndex(1);
-            }
+            loadCpackFromHandler(handler, filePath, true);
             return;
         }
-        QFile file(filePath);
-        if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
-            return;
-        }
-        {
-            DirtyScope guard(this);
-            codeEditor_->setText(QString::fromUtf8(file.readAll()));
-        }
-        codeEditor_->setFocus();
-        hasSavedFile_ = true;
-        setDirty(false);
+        openPlainFileWithPrompt(filePath);
     });
 
     {
@@ -925,8 +845,9 @@ void MainWindow::setupMainEditor() {
     sideStack_->addWidget(stressTestPanel_);
     sideStack_->setCurrentWidget(testPanelWidgets_.panel);
 
-    updateEditorModeButtons();
+    populateCpackTree();
     updateTemplateAvailability();
+    updateEditorModeButtons();
 
     if (stressRunButton_) {
         connect(stressRunButton_, &QPushButton::clicked,
@@ -970,7 +891,35 @@ void MainWindow::setupMainEditor() {
 
     mainSplitter_->addWidget(activityBar_);
     mainSplitter_->addWidget(sidePanel_);
-    mainSplitter_->addWidget(editorWidgets.container);
+    auto *editorWrapper = new QWidget(this);
+    auto *editorLayout = new QVBoxLayout(editorWrapper);
+    editorLayout->setContentsMargins(0, 0, 0, 0);
+    editorLayout->setSpacing(0);
+
+    plainTextBanner_ = new QWidget(editorWrapper);
+    plainTextBanner_->setObjectName("PlainTextBanner");
+    auto *bannerLayout = new QHBoxLayout(plainTextBanner_);
+    bannerLayout->setContentsMargins(12, 8, 12, 8);
+    bannerLayout->setSpacing(8);
+    plainTextBannerLabel_ = new QLabel(
+        "This is a plain text file. Convert to .cpack to enable templates and tests.",
+        plainTextBanner_);
+    plainTextBannerLabel_->setWordWrap(true);
+    plainTextConvertButton_ = new QPushButton("Convert to CPack", plainTextBanner_);
+    bannerLayout->addWidget(plainTextBannerLabel_, 1);
+    bannerLayout->addWidget(plainTextConvertButton_);
+    plainTextBanner_->setVisible(false);
+
+    connect(plainTextConvertButton_, &QPushButton::clicked, this, [this]() {
+        saveFileAsWithTitle("Save as CPack");
+        if (hasSavedFile_) {
+            setPlainTextMode(false);
+        }
+    });
+
+    editorLayout->addWidget(plainTextBanner_);
+    editorLayout->addWidget(editorWidgets.container, 1);
+    mainSplitter_->addWidget(editorWrapper);
 
     // Configure splitter behavior
     mainSplitter_->setCollapsible(0, false);  // Activity bar never collapses
@@ -1025,6 +974,10 @@ void MainWindow::setupMenuBar() {
     editMenu_->addSeparator();
     QAction *preferencesAction = editMenu_->addAction("Preferences...");
 
+    helpMenu_ = menuBar_->addMenu("Help");
+    QAction *helpAction = helpMenu_->addAction("Help");
+    QAction *aboutAction = helpMenu_->addAction("About");
+
     newAction->setShortcut(QKeySequence(Qt::CTRL | Qt::Key_N));
     openAction->setShortcut(QKeySequence(Qt::CTRL | Qt::Key_O));
     saveAction->setShortcut(QKeySequence(Qt::CTRL | Qt::Key_S));
@@ -1063,6 +1016,8 @@ void MainWindow::setupMenuBar() {
         invokeOnFocus("paste");
     });
     connect(preferencesAction, &QAction::triggered, this, &MainWindow::openSettingsDialog);
+    connect(helpAction, &QAction::triggered, this, &MainWindow::openHelpDialog);
+    connect(aboutAction, &QAction::triggered, this, &MainWindow::openAboutDialog);
 
     auto *menuCorner = new QWidget(menuBar_);
     menuCorner->setObjectName("MenuBarCorner");
@@ -1081,10 +1036,11 @@ void MainWindow::setupMenuBar() {
     runAllButton->setFixedSize(28, 24);
     runAllButton->setFocusPolicy(Qt::NoFocus);
     cornerLayout->addWidget(runAllButton);
+    menuRunAllButton_ = runAllButton;
 
     auto *templateButton = new QPushButton(menuCorner);
     templateButton->setObjectName("MenuTemplateButton");
-    templateButton->setToolTip("Edit template for this problem");
+    templateButton->setToolTip("Toggle template view");
     templateButton->setIcon(
         IconUtils::makeTintedIcon(":/images/template.svg",
                                   themeManager_.textColor(),
@@ -1092,8 +1048,10 @@ void MainWindow::setupMenuBar() {
     templateButton->setIconSize(QSize(16, 16));
     templateButton->setFixedSize(28, 24);
     templateButton->setFocusPolicy(Qt::NoFocus);
+    templateButton->setCheckable(true);
     cornerLayout->addWidget(templateButton);
     menuTemplateButton_ = templateButton;
+    syncTemplateToggleUi();
 
     auto *copySolutionButton = new QPushButton(menuCorner);
     copySolutionButton->setObjectName("MenuCopyButton");
@@ -1108,6 +1066,15 @@ void MainWindow::setupMenuBar() {
     cornerLayout->addWidget(copySolutionButton);
 
     auto runAllFromMenu = [this]() {
+        if (plainTextMode_) {
+            return;
+        }
+        if (transcludeTemplateEnabled_ && !currentTemplate_.contains("//#main")) {
+            QMessageBox::warning(this, "Template Missing",
+                                 "The template is missing the //#main marker.\n"
+                                 "Add the marker or disable template transclusion.");
+            return;
+        }
         if (!mainSplitter_ || !sideStack_) {
             return;
         }
@@ -1130,29 +1097,26 @@ void MainWindow::setupMenuBar() {
         runAllTests();
     };
     connect(runAllButton, &QPushButton::clicked, this, runAllFromMenu);
-    auto showCpackPanel = [this]() {
-        if (!mainSplitter_ || !sideStack_ || !cpackPanel_) {
+    auto toggleTemplateView = [this]() {
+        if (plainTextMode_) {
             return;
         }
-        sideStack_->setCurrentWidget(cpackPanel_);
-        if (mainSplitter_->isCollapsed()) {
-            mainSplitter_->expand();
+        transcludeTemplateEnabled_ = !transcludeTemplateEnabled_;
+        QSettings settings("CF Dojo", "CF Dojo");
+        settings.setValue("transcludeTemplate", transcludeTemplateEnabled_);
+        executionController_->setTranscludeTemplateEnabled(transcludeTemplateEnabled_);
+        updateTemplateAvailability();
+        if (settingsWindow_) {
+            settingsWindow_->setTranscludeTemplateEnabled(transcludeTemplateEnabled_);
         }
-        if (templateButton_) {
-            templateButton_->setChecked(true);
-        }
-        if (sidebarToggle_) {
-            sidebarToggle_->setChecked(false);
-        }
-        if (stressTestButton_) {
-            stressTestButton_->setChecked(false);
-        }
-        if (newFileButton_) {
-            newFileButton_->setChecked(false);
+        if (transcludeTemplateEnabled_) {
+            setEditorMode(EditorMode::Template);
+        } else {
+            setEditorMode(EditorMode::Solution);
         }
     };
 
-    connect(templateButton, &QPushButton::clicked, this, showCpackPanel);
+    connect(templateButton, &QPushButton::clicked, this, toggleTemplateView);
 
     auto *runAllShortcut =
         new QShortcut(QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_R), this);
@@ -1165,6 +1129,12 @@ void MainWindow::setupMenuBar() {
         QString tmpl = currentTemplate_;
         if (tmpl.isEmpty()) {
             tmpl = "//#main";
+        }
+        if (transcludeTemplateEnabled_ && !tmpl.contains("//#main")) {
+            QMessageBox::warning(this, "Template Missing",
+                                 "The template is missing the //#main marker.\n"
+                                 "Add the marker or disable template transclusion.");
+            return;
         }
         QString result = solution;
         if (tmpl.contains("//#main")) {
@@ -1186,6 +1156,187 @@ void MainWindow::setupMenuBar() {
     menuBar_->setCornerWidget(menuCorner, Qt::TopRightCorner);
 
     setMenuBar(menuBar_);
+}
+
+void MainWindow::openHelpDialog() {
+    QDialog dialog(this);
+    dialog.setWindowTitle("Help");
+    dialog.setMinimumSize(520, 420);
+
+    ThemeManager theme;
+    const ThemeColors &colors = theme.colors();
+    const QString panelBg = colors.background.name();
+    const QString panelEdge = colors.edge.name();
+
+    auto *layout = new QVBoxLayout(&dialog);
+    layout->setContentsMargins(0, 0, 0, 0);
+    layout->setSpacing(0);
+
+    auto *contentPanel = new QWidget(&dialog);
+    contentPanel->setObjectName("HelpPanel");
+    contentPanel->setAttribute(Qt::WA_StyledBackground, true);
+    contentPanel->setStyleSheet(
+        QString("QWidget#HelpPanel { background: %1; }").arg(panelBg));
+
+    auto *contentLayout = new QVBoxLayout(contentPanel);
+    contentLayout->setContentsMargins(12, 12, 12, 12);
+    contentLayout->setSpacing(12);
+
+    auto *scrollArea = new QScrollArea(contentPanel);
+    scrollArea->setWidgetResizable(true);
+    scrollArea->setFrameShape(QFrame::NoFrame);
+    scrollArea->setStyleSheet(
+        QString("QScrollArea { background: %1; } QScrollArea > QWidget > QWidget { background: %1; }")
+            .arg(panelBg));
+
+    auto *scrollContent = new QWidget(scrollArea);
+    auto *scrollLayout = new QVBoxLayout(scrollContent);
+    scrollLayout->setContentsMargins(12, 12, 12, 12);
+    scrollLayout->setSpacing(12);
+
+    auto *helpText = new QLabel(scrollContent);
+    helpText->setTextFormat(Qt::RichText);
+    helpText->setWordWrap(true);
+    helpText->setText(
+        "<h2>Help</h2>"
+        "<p>CF Dojo is a local competitive programming IDE for solving and testing problems.</p>"
+        "<h3>Quick start</h3>"
+        "<ol>"
+        "<li>Open a .cpack or import from Competitive Companion.</li>"
+        "<li>Write your solution in solution.cpp.</li>"
+        "<li>Add test cases and click Run All.</li>"
+        "</ol>"
+        "<h3>New / Open / Save</h3>"
+        "<ul>"
+        "<li>New creates a blank problem and prompts for a .cpack file.</li>"
+        "<li>Open supports .cpack and plain text files.</li>"
+        "<li>Plain text mode has limited features; convert via the banner.</li>"
+        "</ul>"
+        "<h3>Testing & stress</h3>"
+        "<ul>"
+        "<li>Run All executes your local test cases.</li>"
+        "<li>Stress testing uses generator.cpp + brute.cpp.</li>"
+        "</ul>"
+        "<h3>Templates</h3>"
+        "<p>template.cpp uses //#main to insert your solution.</p>"
+        "<h3>Autosave & recovery</h3>"
+        "<p>Unsaved changes are autosaved and can be restored after a crash.</p>"
+        "<h3>Documentation</h3>"
+        "<p>Full guide: docs/quickstart.md</p>");
+    scrollLayout->addWidget(helpText);
+    scrollLayout->addStretch();
+
+    scrollContent->setLayout(scrollLayout);
+    scrollArea->setWidget(scrollContent);
+    scrollArea->setStyleSheet(
+        QString("QScrollArea { background: %1; border: 1px solid %2; }"
+                "QScrollArea > QWidget > QWidget { background: %1; }")
+            .arg(panelBg, panelEdge));
+    contentLayout->addWidget(scrollArea, 1);
+
+    auto *buttonRow = new QWidget(contentPanel);
+    auto *buttonLayout = new QHBoxLayout(buttonRow);
+    buttonLayout->setContentsMargins(0, 0, 0, 0);
+    buttonLayout->setSpacing(8);
+    buttonLayout->addStretch();
+    auto *closeBtn = new QPushButton("Close", buttonRow);
+    connect(closeBtn, &QPushButton::clicked, &dialog, &QDialog::accept);
+    buttonLayout->addWidget(closeBtn);
+    contentLayout->addWidget(buttonRow);
+
+    layout->addWidget(contentPanel, 1);
+
+    dialog.exec();
+}
+
+void MainWindow::openAboutDialog() {
+    QDialog dialog(this);
+    dialog.setWindowTitle("About");
+    dialog.setMinimumSize(520, 460);
+
+    ThemeManager theme;
+    const ThemeColors &colors = theme.colors();
+    const QString panelBg = colors.background.name();
+    const QString panelEdge = colors.edge.name();
+
+    auto *layout = new QVBoxLayout(&dialog);
+    layout->setContentsMargins(0, 0, 0, 0);
+    layout->setSpacing(0);
+
+    auto *contentPanel = new QWidget(&dialog);
+    contentPanel->setObjectName("HelpPanel");
+    contentPanel->setAttribute(Qt::WA_StyledBackground, true);
+    contentPanel->setStyleSheet(
+        QString("QWidget#HelpPanel { background: %1; }").arg(panelBg));
+
+    auto *contentLayout = new QVBoxLayout(contentPanel);
+    contentLayout->setContentsMargins(12, 12, 12, 12);
+    contentLayout->setSpacing(12);
+
+    auto *scrollArea = new QScrollArea(contentPanel);
+    scrollArea->setWidgetResizable(true);
+    scrollArea->setFrameShape(QFrame::NoFrame);
+    scrollArea->setStyleSheet(
+        QString("QScrollArea { background: %1; } QScrollArea > QWidget > QWidget { background: %1; }")
+            .arg(panelBg));
+
+    auto *scrollContent = new QWidget(scrollArea);
+    auto *scrollLayout = new QVBoxLayout(scrollContent);
+    scrollLayout->setContentsMargins(12, 12, 12, 12);
+    scrollLayout->setSpacing(12);
+
+    auto *aboutText = new QLabel(scrollContent);
+    aboutText->setTextFormat(Qt::RichText);
+    aboutText->setOpenExternalLinks(true);
+    aboutText->setWordWrap(true);
+    aboutText->setText(
+        "<h2>CF Dojo</h2>"
+        "<p>Local competitive programming IDE for fast iteration and testing.</p>"
+        "<h3>Quick start</h3>"
+        "<ol>"
+        "<li>Open a .cpack or import from Competitive Companion.</li>"
+        "<li>Write your solution in solution.cpp.</li>"
+        "<li>Add tests and click Run All.</li>"
+        "</ol>"
+        "<h3>Documentation</h3>"
+        "<p>See docs/quickstart.md for the full guide.</p>"
+        "<h3>Credits</h3>"
+        "<p>Icon sources (The Noun Project). License: CC BY 3.0</p>"
+        "<ul>"
+        "<li>Template - Mamank - <a href=\"https://thenounproject.com/icon/template-8113543/\">source</a></li>"
+        "<li>Trash - insdesign86 - <a href=\"https://thenounproject.com/icon/trash-4665730/\">source</a></li>"
+        "<li>Test case - SBTS - <a href=\"https://thenounproject.com/icon/test-case-2715499/\">source</a></li>"
+        "<li>Anvil - Alum Design - <a href=\"https://thenounproject.com/icon/anvil-8089762/\">source</a></li>"
+        "<li>Load testing - Happy Girl - <a href=\"https://thenounproject.com/icon/load-testing-6394477/\">source</a></li>"
+        "<li>Copy - Kosong Tujuh - <a href=\"https://thenounproject.com/icon/copy-5457986/\">source</a></li>"
+        "<li>File - Damar Creative - <a href=\"https://thenounproject.com/icon/8251834/\">source</a></li>"
+        "<li>Target - Radhika Studio - <a href=\"https://thenounproject.com/icon/8090227/\">source</a></li>"
+        "<li>Settings - Alzam - <a href=\"https://thenounproject.com/icon/5079171/\">source</a></li>"
+        "<li>Battle - Zach Bogart - <a href=\"https://thenounproject.com/icon/5248405/\">source</a></li>"
+        "</ul>");
+    scrollLayout->addWidget(aboutText);
+    scrollLayout->addStretch();
+
+    scrollContent->setLayout(scrollLayout);
+    scrollArea->setWidget(scrollContent);
+    scrollArea->setStyleSheet(
+        QString("QScrollArea { background: %1; border: 1px solid %2; }"
+                "QScrollArea > QWidget > QWidget { background: %1; }")
+            .arg(panelBg, panelEdge));
+    contentLayout->addWidget(scrollArea, 1);
+
+    auto *buttonRow = new QWidget(contentPanel);
+    auto *buttonLayout = new QHBoxLayout(buttonRow);
+    buttonLayout->setContentsMargins(0, 0, 0, 0);
+    buttonLayout->setSpacing(8);
+    buttonLayout->addStretch();
+    auto *closeBtn = new QPushButton("Close", buttonRow);
+    connect(closeBtn, &QPushButton::clicked, &dialog, &QDialog::accept);
+    buttonLayout->addWidget(closeBtn);
+    contentLayout->addWidget(buttonRow);
+
+    layout->addWidget(contentPanel, 1);
+    dialog.exec();
 }
 
 void MainWindow::showCopyToast() {
@@ -1243,6 +1394,13 @@ void MainWindow::syncEditorToMode() {
         if (text != currentProblemRaw_) {
             currentProblemRaw_ = text;
             problemEdited_ = true;
+            QJsonParseError parseError;
+            QJsonDocument doc = QJsonDocument::fromJson(
+                currentProblemRaw_.toUtf8(), &parseError);
+            if (parseError.error == QJsonParseError::NoError && doc.isObject()) {
+                currentProblem_ = doc.object();
+            }
+            updateProblemMetaUi();
         }
         break;
     case EditorMode::Testcases:
@@ -1276,11 +1434,68 @@ void MainWindow::updateEditorModeButtons() {
     }
 }
 
+void MainWindow::updateProblemMetaUi() {
+    if (!testPanelWidgets_.metaLabel) {
+        return;
+    }
+    const int timeLimit = currentProblem_.value("timeLimit").toInt(0);
+    const int memoryLimit = currentProblem_.value("memoryLimit").toInt(0);
+
+    double secondsValue = 0.0;
+    if (timeLimit > 0) {
+        secondsValue = timeLimit / 1000.0;
+        const int secondsRounded = std::max(1, static_cast<int>(std::round(secondsValue)));
+        if (currentTimeout_ != secondsRounded) {
+            currentTimeout_ = secondsRounded;
+        }
+    }
+
+    const QString timeText = timeLimit > 0
+        ? QString("%1 s").arg(secondsValue, 0, 'f', 2)
+        : QString();
+    const QString memoryText = memoryLimit > 0
+        ? QString("%1 MB").arg(memoryLimit)
+        : QString();
+
+    testPanelWidgets_.metaLabel->setText(
+        QString("TL - %1  ML - %2")
+            .arg(timeText, memoryText));
+
+}
+
+bool MainWindow::confirmDiscardUnsaved(const QString &actionLabel) {
+    if (!isDirty_) {
+        return true;
+    }
+
+    QMessageBox box(this);
+    box.setWindowTitle("Unsaved Changes");
+    box.setIcon(QMessageBox::Warning);
+    box.setText("You have unsaved changes in this problem.");
+    box.setInformativeText(QString("Save before %1?").arg(actionLabel));
+    auto *saveBtn = box.addButton("Save", QMessageBox::AcceptRole);
+    auto *discardBtn = box.addButton("Discard", QMessageBox::DestructiveRole);
+    box.addButton("Cancel", QMessageBox::RejectRole);
+    box.setDefaultButton(saveBtn);
+    box.exec();
+
+    if (box.clickedButton() == saveBtn) {
+        saveFile();
+        return !isDirty_;
+    }
+    if (box.clickedButton() == discardBtn) {
+        setDirty(false);
+        return true;
+    }
+    return false;
+}
+
 void MainWindow::markDirty() {
     if (dirtySuppressionDepth_ > 0) {
         return;
     }
     setDirty(true);
+    scheduleAutosave();
 }
 
 void MainWindow::setDirty(bool dirty) {
@@ -1289,14 +1504,12 @@ void MainWindow::setDirty(bool dirty) {
     }
     isDirty_ = dirty;
     updateWindowTitle();
+    if (!dirty) {
+        clearAutosaveFiles();
+    }
 }
 
 void MainWindow::updateWindowTitle() {
-    if (mainStack_ && landingPage_ &&
-        mainStack_->currentWidget() == landingPage_) {
-        setWindowTitle(baseWindowTitle_);
-        return;
-    }
     QString modeLabel;
     switch (editorMode_) {
     case EditorMode::Solution:
@@ -1321,6 +1534,342 @@ void MainWindow::updateWindowTitle() {
     const QString editLabel = hasSavedFile_ ? modeLabel : "Untitled";
     const QString dirtyPrefix = isDirty_ ? "* " : "";
     setWindowTitle(QString("%1%2 - %3").arg(dirtyPrefix, editLabel, baseWindowTitle_));
+}
+
+QString MainWindow::autosaveDir() const {
+    QString base = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
+    if (base.isEmpty()) {
+        base = QDir::homePath() + "/.cfdojo";
+    }
+    QDir dir(base);
+    dir.mkpath(".");
+    const QString autosaveRoot = dir.filePath("autosave");
+    QDir autosaveDir(autosaveRoot);
+    autosaveDir.mkpath(".");
+    return autosaveRoot;
+}
+
+QString MainWindow::autosaveCpackPath() const {
+    return QDir(autosaveDir()).filePath("autosave.cpack");
+}
+
+QString MainWindow::autosaveMetaPath() const {
+    return QDir(autosaveDir()).filePath("autosave.json");
+}
+
+QString MainWindow::autosaveSessionPath() const {
+    return QDir(autosaveDir()).filePath("session.lock");
+}
+
+void MainWindow::setupAutosave() {
+    if (!autosaveTimer_) {
+        autosaveTimer_ = new QTimer(this);
+        autosaveTimer_->setSingleShot(true);
+        connect(autosaveTimer_, &QTimer::timeout, this, &MainWindow::performAutosave);
+    }
+
+    QFile sessionFile(autosaveSessionPath());
+    if (sessionFile.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+        const QString stamp = QDateTime::currentDateTimeUtc().toString(Qt::ISODate);
+        sessionFile.write(stamp.toUtf8());
+        sessionFile.close();
+    }
+}
+
+void MainWindow::scheduleAutosave() {
+    if (!autosaveTimer_ || !hasSavedFile_) {
+        return;
+    }
+    autosaveTimer_->start(std::max(1000, autosaveIntervalMs_));
+}
+
+void MainWindow::performAutosave() {
+    if (!isDirty_ || !hasSavedFile_) {
+        return;
+    }
+
+    syncEditorToMode();
+    CpackFileHandler handler;
+    handler.addFile("soluiton.cpp", currentSolutionCode_.toUtf8());
+    handler.addFile("brute.cpp", currentBruteCode_.toUtf8());
+    handler.addFile("generator.cpp", currentGeneratorCode_.toUtf8());
+    handler.addFile("template.cpp", currentTemplate_.toUtf8());
+
+    if (problemEdited_) {
+        handler.addFile("problem.json", currentProblemRaw_.toUtf8());
+    } else if (!currentProblem_.isEmpty()) {
+        QJsonDocument problemDoc(currentProblem_);
+        handler.addFile("problem.json", problemDoc.toJson(QJsonDocument::Indented));
+    }
+
+    if (testcasesEdited_) {
+        handler.addFile("testcases.json", currentTestcasesRaw_.toUtf8());
+    } else {
+        QJsonArray testsArray;
+        for (const auto &widgets : caseWidgets_) {
+            QJsonObject testObj;
+            if (widgets.inputEditor) {
+                testObj["input"] = widgets.inputEditor->toPlainText();
+            }
+            if (widgets.expectedEditor) {
+                testObj["output"] = widgets.expectedEditor->toPlainText();
+            }
+            testsArray.append(testObj);
+        }
+        if (!testsArray.isEmpty()) {
+            QJsonObject testsDoc;
+            testsDoc["tests"] = testsArray;
+            testsDoc["timeout"] = currentTimeout_;
+            QJsonDocument doc(testsDoc);
+            handler.addFile("testcases.json", doc.toJson(QJsonDocument::Indented));
+        }
+    }
+
+    if (!handler.save(autosaveCpackPath())) {
+        return;
+    }
+
+    QJsonObject meta;
+    meta["timestamp"] = QDateTime::currentDateTimeUtc().toString(Qt::ISODate);
+    meta["filePath"] = currentFilePath_;
+    meta["editorMode"] = static_cast<int>(editorMode_);
+    meta["dirty"] = true;
+    meta["hasSavedFile"] = hasSavedFile_;
+    QJsonDocument metaDoc(meta);
+    QFile metaFile(autosaveMetaPath());
+    if (metaFile.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+        metaFile.write(metaDoc.toJson(QJsonDocument::Indented));
+        metaFile.close();
+    }
+}
+
+void MainWindow::clearAutosaveFiles() {
+    QFile::remove(autosaveCpackPath());
+    QFile::remove(autosaveMetaPath());
+}
+
+void MainWindow::checkForRecovery() {
+    const QString cpackPath = autosaveCpackPath();
+    const QString metaPath = autosaveMetaPath();
+    if (!QFile::exists(cpackPath) || !QFile::exists(metaPath)) {
+        return;
+    }
+
+    QFile metaFile(metaPath);
+    if (!metaFile.open(QIODevice::ReadOnly)) {
+        return;
+    }
+    const QJsonDocument metaDoc = QJsonDocument::fromJson(metaFile.readAll());
+    metaFile.close();
+    if (!metaDoc.isObject()) {
+        return;
+    }
+
+    const QJsonObject meta = metaDoc.object();
+    const bool wasDirty = meta.value("dirty").toBool(false);
+    const bool crashed = QFile::exists(autosaveSessionPath());
+    if (!wasDirty && !crashed) {
+        return;
+    }
+
+    QString timeLabel = meta.value("timestamp").toString();
+    if (!timeLabel.isEmpty()) {
+        const QDateTime stamp = QDateTime::fromString(timeLabel, Qt::ISODate).toLocalTime();
+        if (stamp.isValid()) {
+            timeLabel = stamp.toString("yyyy-MM-dd HH:mm");
+        }
+    }
+
+    QMessageBox box(this);
+    box.setWindowTitle("Recover Unsaved Work");
+    box.setIcon(QMessageBox::Question);
+    box.setWindowModality(Qt::WindowModal);
+    box.setText("A recovery file was found from a previous session.");
+    if (!timeLabel.isEmpty()) {
+        box.setInformativeText(QString("Last autosave: %1").arg(timeLabel));
+    }
+    auto *restoreBtn = box.addButton("Restore", QMessageBox::AcceptRole);
+    auto *discardBtn = box.addButton("Discard", QMessageBox::DestructiveRole);
+    box.setDefaultButton(restoreBtn);
+    QTimer::singleShot(0, &box, [this, &box]() {
+        box.adjustSize();
+        const QSize size = box.size();
+        const QRect parentRect = frameGeometry();
+        QPoint pos(parentRect.center().x() - size.width() / 2,
+                   parentRect.center().y() - size.height() / 2);
+        QScreen *screen = nullptr;
+        if (windowHandle()) {
+            screen = windowHandle()->screen();
+        }
+        if (!screen) {
+            screen = QGuiApplication::screenAt(parentRect.center());
+        }
+        if (!screen) {
+            screen = this->screen();
+        }
+        if (!screen) {
+            screen = QGuiApplication::primaryScreen();
+        }
+        if (screen) {
+            const QRect bounds = screen->availableGeometry();
+            pos.setX(std::clamp(pos.x(), bounds.left(), bounds.right() - size.width()));
+            pos.setY(std::clamp(pos.y(), bounds.top(), bounds.bottom() - size.height()));
+        }
+        box.move(pos);
+        box.raise();
+        box.activateWindow();
+    });
+    box.exec();
+
+    if (box.clickedButton() == restoreBtn) {
+        CpackFileHandler handler;
+        if (!handler.load(cpackPath)) {
+            QMessageBox::critical(this, "Error",
+                "Failed to restore recovery file: " + handler.errorString());
+            return;
+        }
+        const QString savedPath = meta.value("filePath").toString();
+        const bool savedFlag = meta.value("hasSavedFile").toBool(!savedPath.isEmpty());
+        loadCpackFromHandler(handler, savedPath, savedFlag);
+
+        const int modeValue = meta.value("editorMode").toInt(
+            static_cast<int>(EditorMode::Solution));
+        setEditorMode(static_cast<EditorMode>(modeValue));
+        setDirty(true);
+        scheduleAutosave();
+    } else if (box.clickedButton() == discardBtn) {
+        clearAutosaveFiles();
+    }
+}
+
+void MainWindow::loadCpackFromHandler(const CpackFileHandler &handler,
+                                      const QString &path,
+                                      bool markSavedFile) {
+    DirtyScope guard(this);
+    if (handler.hasFile("manifest.json")) {
+        QJsonParseError manifestError;
+        const QJsonDocument manifestDoc = QJsonDocument::fromJson(
+            handler.getFile("manifest.json"), &manifestError);
+        if (manifestError.error == QJsonParseError::NoError && manifestDoc.isObject()) {
+            const int version = manifestDoc.object().value("version").toInt(1);
+            if (version > 1) {
+                QMessageBox::critical(this, "Error", "Unsupported CPack format");
+                return;
+            }
+        }
+    }
+
+    const bool hasSolutionFile =
+        handler.hasFile("soluiton.cpp") || handler.hasFile("solution.cpp");
+    if (!hasSolutionFile) {
+        QMessageBox::critical(this, "Error", "Unsupported CPack format");
+        return;
+    }
+
+    currentSolutionCode_.clear();
+    if (handler.hasFile("soluiton.cpp")) {
+        currentSolutionCode_ = QString::fromUtf8(handler.getFile("soluiton.cpp"));
+    } else if (handler.hasFile("solution.cpp")) {
+        currentSolutionCode_ = QString::fromUtf8(handler.getFile("solution.cpp"));
+    }
+    if (codeEditor_) {
+        codeEditor_->setText(currentSolutionCode_);
+    }
+
+    currentBruteCode_.clear();
+    currentGeneratorCode_.clear();
+    if (handler.hasFile("brute.cpp")) {
+        currentBruteCode_ = QString::fromUtf8(handler.getFile("brute.cpp"));
+    }
+    if (handler.hasFile("generator.cpp")) {
+        currentGeneratorCode_ = QString::fromUtf8(handler.getFile("generator.cpp"));
+    }
+
+    editorMode_ = EditorMode::Solution;
+    updateEditorModeButtons();
+    updateWindowTitle();
+
+    if (handler.hasFile("template.cpp")) {
+        currentTemplate_ = QString::fromUtf8(handler.getFile("template.cpp"));
+    } else {
+        currentTemplate_ = loadDefaultTemplate();
+    }
+
+    problemEdited_ = false;
+    if (handler.hasFile("problem.json")) {
+        const QByteArray problemBytes = handler.getFile("problem.json");
+        currentProblemRaw_ = QString::fromUtf8(problemBytes);
+        QJsonParseError parseError;
+        QJsonDocument problemDoc = QJsonDocument::fromJson(problemBytes, &parseError);
+        if (parseError.error == QJsonParseError::NoError) {
+            currentProblem_ = problemDoc.object();
+        }
+    } else {
+        currentProblem_ = QJsonObject();
+        currentProblemRaw_.clear();
+    }
+    const QString loadedTitle = currentProblem_.value("name").toString().trimmed();
+    if (!loadedTitle.isEmpty()) {
+        baseWindowTitle_ = QString("CF Dojo - %1").arg(loadedTitle);
+    } else {
+        baseWindowTitle_ = "CF Dojo - v1.0";
+    }
+    updateProblemMetaUi();
+
+    testcasesEdited_ = false;
+    currentTimeout_ = 5;
+    bool loadedTests = false;
+    for (auto &widgets : caseWidgets_) {
+        if (widgets.panel) {
+            widgets.panel->deleteLater();
+        }
+    }
+    caseWidgets_.clear();
+    testCases_.clear();
+
+    if (handler.hasFile("testcases.json")) {
+        const QByteArray testsBytes = handler.getFile("testcases.json");
+        currentTestcasesRaw_ = QString::fromUtf8(testsBytes);
+        QJsonParseError parseError;
+        QJsonDocument testsDoc = QJsonDocument::fromJson(testsBytes, &parseError);
+        if (parseError.error == QJsonParseError::NoError && testsDoc.isObject()) {
+            QJsonObject testsObj = testsDoc.object();
+            QJsonArray testsArray = testsObj["tests"].toArray();
+
+            if (testsObj.contains("timeout")) {
+                currentTimeout_ = testsObj["timeout"].toInt(5);
+            }
+
+            for (const QJsonValue &testVal : testsArray) {
+                QJsonObject test = testVal.toObject();
+                addTestCase();
+                if (!caseWidgets_.empty()) {
+                    auto &lastCase = caseWidgets_.back();
+                    if (lastCase.inputEditor) {
+                        lastCase.inputEditor->setPlainText(test["input"].toString());
+                    }
+                    if (lastCase.expectedEditor) {
+                        lastCase.expectedEditor->setPlainText(test["output"].toString());
+                    }
+                }
+            }
+            loadedTests = !testsArray.isEmpty();
+        }
+    } else {
+        currentTestcasesRaw_.clear();
+    }
+
+    if (!loadedTests) {
+        addTestCase();
+    }
+
+    currentFilePath_ = path;
+    hasSavedFile_ = markSavedFile;
+    setDirty(false);
+    setPlainTextMode(false);
+    updateTemplateAvailability();
+    updateEditorModeButtons();
+    updateWindowTitle();
 }
 
 QString MainWindow::buildProblemJson() const {
@@ -1349,6 +1898,39 @@ QString MainWindow::buildTestcasesJson() const {
     testsDoc["timeout"] = currentTimeout_;
     QJsonDocument doc(testsDoc);
     return QString::fromUtf8(doc.toJson(QJsonDocument::Indented));
+}
+
+
+void MainWindow::populateCpackTree() {
+    if (!cpackModel_) {
+        return;
+    }
+
+    cpackModel_->clear();
+    const QIcon fileIcon = QApplication::style()->standardIcon(QStyle::SP_FileIcon);
+    auto addCpackItem = [this, &fileIcon](const QString &label,
+                                          const QString &tooltip,
+                                          EditorMode mode) {
+        auto *item = new QStandardItem(fileIcon, label);
+        item->setData(static_cast<int>(mode), Qt::UserRole);
+        item->setEditable(false);
+        item->setToolTip(tooltip);
+        cpackModel_->appendRow(item);
+        return item;
+    };
+
+    addCpackItem("solution.cpp", "Your main solution code.", EditorMode::Solution);
+    addCpackItem("brute.cpp", "Optional: slow but correct solution for stress tests.",
+                 EditorMode::Brute);
+    addCpackItem("generator.cpp", "Optional: randomized generator for stress tests.",
+                 EditorMode::Generator);
+    cpackTemplateItem_ = addCpackItem("template.cpp",
+                                      "Template with //#main where solution is inserted.",
+                                      EditorMode::Template);
+    addCpackItem("problem.json", "Problem metadata from Competitive Companion.",
+                 EditorMode::Problem);
+    addCpackItem("testcases.json", "Input/output test cases and timeout.",
+                 EditorMode::Testcases);
 }
 
 void MainWindow::setEditorMode(EditorMode mode) {
@@ -1392,6 +1974,7 @@ void MainWindow::setEditorMode(EditorMode mode) {
             }
             DirtyScope guard(this);
             codeEditor_->setText(next);
+            updateTemplateMarkerVisibility();
         }
     }
     updateEditorModeButtons();
@@ -1489,6 +2072,70 @@ void MainWindow::updateTemplateAvailability() {
     }
     if (!transcludeTemplateEnabled_ && editorMode_ == EditorMode::Template) {
         setEditorMode(EditorMode::Solution);
+    }
+    updateTemplateMarkerVisibility();
+    syncTemplateToggleUi();
+}
+
+void MainWindow::updateTemplateMarkerVisibility() {
+    if (!codeEditor_) {
+        return;
+    }
+
+    const int lineCount = codeEditor_->lines();
+    if (lineCount <= 0) {
+        return;
+    }
+
+    codeEditor_->SendScintilla(QsciScintilla::SCI_SHOWLINES, 0, lineCount - 1);
+
+    if (!transcludeTemplateEnabled_ || editorMode_ != EditorMode::Template) {
+        return;
+    }
+
+    const QString text = codeEditor_->text();
+    if (!text.contains(kTemplateMarker)) {
+        return;
+    }
+
+    const QStringList lines = text.split('\n', Qt::KeepEmptyParts);
+    const int maxLine = std::min(lineCount, static_cast<int>(lines.size())) - 1;
+    if (maxLine < 0) {
+        return;
+    }
+
+    int hideStart = -1;
+    for (int i = 0; i <= maxLine; ++i) {
+        const bool hasMarker = lines[i].contains(kTemplateMarker);
+        if (hasMarker) {
+            if (hideStart == -1) {
+                hideStart = i;
+            }
+        } else if (hideStart != -1) {
+            codeEditor_->SendScintilla(QsciScintilla::SCI_HIDELINES, hideStart, i - 1);
+            hideStart = -1;
+        }
+    }
+    if (hideStart != -1) {
+        codeEditor_->SendScintilla(QsciScintilla::SCI_HIDELINES, hideStart, maxLine);
+    }
+}
+
+void MainWindow::syncTemplateToggleUi() {
+    const QString menuTip = transcludeTemplateEnabled_
+        ? "Hide template view"
+        : "Show template view";
+    const QString barTip = transcludeTemplateEnabled_
+        ? "Hide template"
+        : "Show template";
+
+    if (menuTemplateButton_) {
+        menuTemplateButton_->setCheckable(true);
+        menuTemplateButton_->setChecked(transcludeTemplateEnabled_);
+        menuTemplateButton_->setToolTip(menuTip);
+    }
+    if (templateButton_) {
+        templateButton_->setToolTip(barTip);
     }
 }
 
@@ -2391,6 +3038,9 @@ void MainWindow::resetZoom() {
 }
 
 void MainWindow::newFile() {
+    if (!confirmDiscardUnsaved("creating a new file")) {
+        return;
+    }
     DirtyScope guard(this);
     if (codeEditor_) {
         codeEditor_->clear();
@@ -2407,19 +3057,28 @@ void MainWindow::newFile() {
     currentTestcasesRaw_.clear();
     problemEdited_ = false;
     testcasesEdited_ = false;
+    currentTimeout_ = 5;
+    updateProblemMetaUi();
     updateEditorModeButtons();
     updateWindowTitle();
     clearAllTestCases();
     addTestCase();
+    updateTemplateAvailability();
+    updateEditorModeButtons();
     setDirty(false);
+    saveFileAsWithTitle("Create CPack");
+    setPlainTextMode(false);
 }
 
 void MainWindow::openFile() {
+    if (!confirmDiscardUnsaved("opening another file")) {
+        return;
+    }
     const QString path = QFileDialog::getOpenFileName(
         this,
-        "Open Problem",
+        "Open CPack or Text File",
         QString(),
-        "CPack Files (*.cpack);;C++ Files (*.cpp);;All Files (*)"
+        "All Supported Files (*.cpack *.cpp *.py *.java *.txt *.md *.json *.in *.out);;CPack Files (*.cpack);;All Files (*)"
     );
     
     if (path.isEmpty()) {
@@ -2433,133 +3092,9 @@ void MainWindow::openFile() {
                 "Failed to open file: " + handler.errorString());
             return;
         }
-        DirtyScope guard(this);
-        
-        // Load solution code (support legacy "solution.cpp")
-        currentSolutionCode_.clear();
-        if (handler.hasFile("soluiton.cpp")) {
-            currentSolutionCode_ = QString::fromUtf8(handler.getFile("soluiton.cpp"));
-        } else if (handler.hasFile("solution.cpp")) {
-            currentSolutionCode_ = QString::fromUtf8(handler.getFile("solution.cpp"));
-        }
-        if (codeEditor_) {
-            codeEditor_->setText(currentSolutionCode_);
-        }
-
-        // Load optional brute/generator sources
-        currentBruteCode_.clear();
-        currentGeneratorCode_.clear();
-        if (handler.hasFile("brute.cpp")) {
-            currentBruteCode_ = QString::fromUtf8(handler.getFile("brute.cpp"));
-        }
-        if (handler.hasFile("generator.cpp")) {
-            currentGeneratorCode_ = QString::fromUtf8(handler.getFile("generator.cpp"));
-        }
-        editorMode_ = EditorMode::Solution;
-        updateEditorModeButtons();
-        updateWindowTitle();
-        
-        // Load template (default to //#main if not present)
-        if (handler.hasFile("template.cpp")) {
-            currentTemplate_ = QString::fromUtf8(handler.getFile("template.cpp"));
-        } else {
-            currentTemplate_ = loadDefaultTemplate();
-        }
-        
-        // Load problem metadata
-        problemEdited_ = false;
-        if (handler.hasFile("problem.json")) {
-            const QByteArray problemBytes = handler.getFile("problem.json");
-            currentProblemRaw_ = QString::fromUtf8(problemBytes);
-            QJsonParseError parseError;
-            QJsonDocument problemDoc = QJsonDocument::fromJson(
-                problemBytes, &parseError);
-            if (parseError.error == QJsonParseError::NoError) {
-                currentProblem_ = problemDoc.object();
-            }
-        } else {
-            currentProblem_ = QJsonObject();
-            currentProblemRaw_.clear();
-        }
-        
-        // Load test cases
-        testcasesEdited_ = false;
-        if (handler.hasFile("testcases.json")) {
-            const QByteArray testsBytes = handler.getFile("testcases.json");
-            currentTestcasesRaw_ = QString::fromUtf8(testsBytes);
-            QJsonParseError parseError;
-            QJsonDocument testsDoc = QJsonDocument::fromJson(
-                testsBytes, &parseError);
-            if (parseError.error == QJsonParseError::NoError) {
-                QJsonObject testsObj = testsDoc.object();
-                QJsonArray testsArray = testsObj["tests"].toArray();
-                
-                // Load timeout if present
-                if (testsObj.contains("timeout")) {
-                    currentTimeout_ = testsObj["timeout"].toInt(5);
-                }
-                
-                // Clear existing test cases
-                for (auto &widgets : caseWidgets_) {
-                    if (widgets.panel) {
-                        widgets.panel->deleteLater();
-                    }
-                }
-                caseWidgets_.clear();
-                
-                // Add loaded test cases
-                for (const QJsonValue &testVal : testsArray) {
-                    QJsonObject test = testVal.toObject();
-                    addTestCase();
-                    if (!caseWidgets_.empty()) {
-                        auto &lastCase = caseWidgets_.back();
-                        if (lastCase.inputEditor) {
-                            lastCase.inputEditor->setPlainText(test["input"].toString());
-                        }
-                        if (lastCase.expectedEditor) {
-                            lastCase.expectedEditor->setPlainText(test["output"].toString());
-                        }
-                    }
-                }
-            }
-        } else {
-            currentTestcasesRaw_.clear();
-        }
-        
-        currentFilePath_ = path;
-        hasSavedFile_ = true;
-        setDirty(false);
-        
-        // Switch to editor view
-        if (mainStack_ && mainStack_->count() > 1) {
-            mainStack_->setCurrentIndex(1);
-        }
+        loadCpackFromHandler(handler, path, true);
     } else {
-        // Plain text file (e.g., .cpp)
-        QFile file(path);
-        if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
-            QMessageBox::critical(this, "Error", 
-                "Failed to open file: " + file.errorString());
-            return;
-        }
-        currentSolutionCode_ = QString::fromUtf8(file.readAll());
-        if (codeEditor_) {
-            DirtyScope guard(this);
-            codeEditor_->setText(currentSolutionCode_);
-        }
-        editorMode_ = EditorMode::Solution;
-        updateEditorModeButtons();
-        updateWindowTitle();
-        // For plain files, we'll save as .cpack on Save As
-        currentFilePath_.clear();
-        currentTemplate_ = loadDefaultTemplate();
-        currentProblem_ = QJsonObject();
-        currentProblemRaw_.clear();
-        currentTestcasesRaw_.clear();
-        problemEdited_ = false;
-        testcasesEdited_ = false;
-        hasSavedFile_ = true;
-        setDirty(false);
+        openPlainFileWithPrompt(path);
     }
 }
 
@@ -2571,46 +3106,41 @@ void MainWindow::saveFile() {
     
     CpackFileHandler handler;
     
-    // Save solution code (new key: soluiton.cpp)
     syncEditorToMode();
-    handler.addFile("soluiton.cpp", currentSolutionCode_.toUtf8());
 
-    // Save optional brute/generator sources
+    handler.addFile("soluiton.cpp", currentSolutionCode_.toUtf8());
     handler.addFile("brute.cpp", currentBruteCode_.toUtf8());
     handler.addFile("generator.cpp", currentGeneratorCode_.toUtf8());
-    
-    // Save template (with //#main transclusion marker)
     handler.addFile("template.cpp", currentTemplate_.toUtf8());
-    
-    // Save problem metadata if available
+
     if (problemEdited_) {
         handler.addFile("problem.json", currentProblemRaw_.toUtf8());
     } else if (!currentProblem_.isEmpty()) {
         QJsonDocument problemDoc(currentProblem_);
         handler.addFile("problem.json", problemDoc.toJson(QJsonDocument::Indented));
     }
-    
-    // Save test cases from UI
-    QJsonArray testsArray;
-    for (const auto &widgets : caseWidgets_) {
-        QJsonObject testObj;
-        if (widgets.inputEditor) {
-            testObj["input"] = widgets.inputEditor->toPlainText();
-        }
-        if (widgets.expectedEditor) {
-            testObj["output"] = widgets.expectedEditor->toPlainText();
-        }
-        testsArray.append(testObj);
-    }
-    
+
     if (testcasesEdited_) {
         handler.addFile("testcases.json", currentTestcasesRaw_.toUtf8());
-    } else if (!testsArray.isEmpty()) {
-        QJsonObject testsDoc;
-        testsDoc["tests"] = testsArray;
-        testsDoc["timeout"] = currentTimeout_;
-        QJsonDocument doc(testsDoc);
-        handler.addFile("testcases.json", doc.toJson(QJsonDocument::Indented));
+    } else {
+        QJsonArray testsArray;
+        for (const auto &widgets : caseWidgets_) {
+            QJsonObject testObj;
+            if (widgets.inputEditor) {
+                testObj["input"] = widgets.inputEditor->toPlainText();
+            }
+            if (widgets.expectedEditor) {
+                testObj["output"] = widgets.expectedEditor->toPlainText();
+            }
+            testsArray.append(testObj);
+        }
+        if (!testsArray.isEmpty()) {
+            QJsonObject testsDoc;
+            testsDoc["tests"] = testsArray;
+            testsDoc["timeout"] = currentTimeout_;
+            QJsonDocument doc(testsDoc);
+            handler.addFile("testcases.json", doc.toJson(QJsonDocument::Indented));
+        }
     }
     
     if (!handler.save(currentFilePath_)) {
@@ -2619,23 +3149,182 @@ void MainWindow::saveFile() {
     } else {
         hasSavedFile_ = true;
         setDirty(false);
+        if (currentFilePath_.endsWith(".cpack", Qt::CaseInsensitive)) {
+            setPlainTextMode(false);
+        }
     }
 }
 
 void MainWindow::saveFileAs() {
-    const QString path = QFileDialog::getSaveFileName(
+    saveFileAsWithTitle("Save Problem");
+}
+
+void MainWindow::saveFileAsWithTitle(const QString &title) {
+    QString path = QFileDialog::getSaveFileName(
         this,
-        "Save Problem",
+        title,
         currentFilePath_.isEmpty() ? "problem.cpack" : currentFilePath_,
         "cpack Files (*.cpack)"
     );
-    
+
     if (path.isEmpty()) {
         return;
     }
-    
+
+    if (!path.endsWith(".cpack", Qt::CaseInsensitive)) {
+        path += ".cpack";
+    }
     currentFilePath_ = path;
     saveFile();
+}
+
+void MainWindow::openPlainFileWithPrompt(const QString &path) {
+    QFile file(path);
+    if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
+        QMessageBox::critical(this, "Error",
+            "Failed to open file: " + file.errorString());
+        return;
+    }
+
+    QFileInfo info(path);
+    baseWindowTitle_ = info.fileName().isEmpty()
+        ? QString("CF Dojo - v1.0")
+        : QString("CF Dojo - %1").arg(info.fileName());
+
+    const QString contents = QString::fromUtf8(file.readAll());
+    currentSolutionCode_ = contents;
+    if (codeEditor_) {
+        DirtyScope guard(this);
+        codeEditor_->setText(contents);
+    }
+
+    editorMode_ = EditorMode::Solution;
+    updateEditorModeButtons();
+    updateWindowTitle();
+    currentFilePath_.clear();
+    currentTemplate_ = loadDefaultTemplate();
+    currentProblem_ = QJsonObject();
+    currentProblemRaw_.clear();
+    currentTestcasesRaw_.clear();
+    problemEdited_ = false;
+    testcasesEdited_ = false;
+    currentTimeout_ = 5;
+    updateProblemMetaUi();
+    hasSavedFile_ = false;
+    setDirty(false);
+    populateCpackTree();
+    updateTemplateAvailability();
+    updateEditorModeButtons();
+
+    QMessageBox box(this);
+    box.setWindowTitle("Convert to CPack?");
+    box.setIcon(QMessageBox::Question);
+    box.setText("This is a plain text file.");
+    box.setInformativeText(
+        "Convert to .cpack to enable templates, tests, and problem data.\n"
+        "You can also convert later from the banner.");
+    auto *saveBtn = box.addButton("Convert to CPack", QMessageBox::AcceptRole);
+    box.addButton("Keep as Text", QMessageBox::RejectRole);
+    box.setDefaultButton(saveBtn);
+    box.exec();
+
+    if (box.clickedButton() == saveBtn) {
+        saveFileAsWithTitle("Save as CPack");
+        if (!hasSavedFile_) {
+            setPlainTextMode(true);
+            return;
+        }
+        setPlainTextMode(false);
+        return;
+    }
+    setPlainTextMode(true);
+}
+
+void MainWindow::setPlainTextMode(bool enabled) {
+    plainTextMode_ = enabled;
+    const QColor normal = themeManager_.textColor();
+    const QColor inactive = QColor("#808080");
+    const QColor edge = themeManager_.edgeColor();
+
+    auto applyDefaultTint = [normal, inactive](ActivityBarButton *button) {
+        if (!button) {
+            return;
+        }
+        button->setTintColors(normal, normal, inactive);
+    };
+
+    auto applyDisabledTint = [edge](ActivityBarButton *button) {
+        if (!button) {
+            return;
+        }
+        button->setTintColors(edge, edge, edge);
+    };
+
+    auto setMenuButtonState = [this, normal, edge](QPushButton *button,
+                                                   const QString &iconPath,
+                                                   bool isEnabled) {
+        if (!button) {
+            return;
+        }
+        const QColor tint = isEnabled ? normal : edge;
+        button->setEnabled(isEnabled);
+        button->setIcon(IconUtils::makeTintedIcon(iconPath, tint, QSize(16, 16)));
+    };
+
+    if (enabled) {
+        if (plainTextBanner_) {
+            plainTextBanner_->setVisible(true);
+        }
+        if (mainSplitter_) {
+            wasSidePanelCollapsed_ = mainSplitter_->isCollapsed();
+            if (!wasSidePanelCollapsed_) {
+                mainSplitter_->collapse();
+            }
+        }
+        if (sidebarToggle_) {
+            sidebarToggle_->setActiveState(false);
+            sidebarToggle_->setChecked(false);
+            sidebarToggle_->setEnabled(false);
+            applyDisabledTint(sidebarToggle_);
+        }
+        if (stressTestButton_) {
+            stressTestButton_->setActiveState(false);
+            stressTestButton_->setChecked(false);
+            stressTestButton_->setEnabled(false);
+            applyDisabledTint(stressTestButton_);
+        }
+        if (templateButton_) {
+            templateButton_->setActiveState(false);
+            templateButton_->setChecked(false);
+            templateButton_->setEnabled(false);
+            applyDisabledTint(templateButton_);
+        }
+        setMenuButtonState(menuRunAllButton_, ":/images/play.svg", false);
+        setMenuButtonState(menuTemplateButton_, ":/images/template.svg", false);
+        return;
+    }
+
+    if (plainTextBanner_) {
+        plainTextBanner_->setVisible(false);
+    }
+    if (sidebarToggle_) {
+        sidebarToggle_->setEnabled(true);
+        applyDefaultTint(sidebarToggle_);
+    }
+    if (stressTestButton_) {
+        stressTestButton_->setEnabled(true);
+        applyDefaultTint(stressTestButton_);
+    }
+    if (templateButton_) {
+        templateButton_->setEnabled(true);
+        applyDefaultTint(templateButton_);
+    }
+    setMenuButtonState(menuRunAllButton_, ":/images/play.svg", true);
+    setMenuButtonState(menuTemplateButton_, ":/images/template.svg", true);
+    if (mainSplitter_ && !wasSidePanelCollapsed_ && mainSplitter_->isCollapsed()) {
+        mainSplitter_->expand();
+    }
+    updateActivityBarActiveStates(mainSplitter_ && mainSplitter_->isCollapsed());
 }
 
 void MainWindow::setupCompanionListener() {
@@ -2657,6 +3346,9 @@ void MainWindow::setupCompanionListener() {
 }
 
 void MainWindow::onProblemReceived(const QJsonObject &problem) {
+    if (!confirmDiscardUnsaved("importing a new problem")) {
+        return;
+    }
     qDebug() << "Problem received:" << problem["name"].toString();
     
     // Ensure UI is ready
@@ -2680,98 +3372,9 @@ void MainWindow::onProblemReceived(const QJsonObject &problem) {
     
     // Check if .cpack file already exists
     if (QFile::exists(cpackPath)) {
-        // Load existing file
         CpackFileHandler handler;
         if (handler.load(cpackPath)) {
-            DirtyScope guard(this);
-            // Load solution code (support legacy "solution.cpp")
-            currentSolutionCode_.clear();
-            if (handler.hasFile("soluiton.cpp")) {
-                currentSolutionCode_ = QString::fromUtf8(handler.getFile("soluiton.cpp"));
-            } else if (handler.hasFile("solution.cpp")) {
-                currentSolutionCode_ = QString::fromUtf8(handler.getFile("solution.cpp"));
-            }
-            if (codeEditor_) {
-                codeEditor_->setText(currentSolutionCode_);
-            }
-
-            // Load optional brute/generator sources
-            currentBruteCode_.clear();
-            currentGeneratorCode_.clear();
-            if (handler.hasFile("brute.cpp")) {
-                currentBruteCode_ = QString::fromUtf8(handler.getFile("brute.cpp"));
-            }
-            if (handler.hasFile("generator.cpp")) {
-                currentGeneratorCode_ = QString::fromUtf8(handler.getFile("generator.cpp"));
-            }
-            editorMode_ = EditorMode::Solution;
-            updateEditorModeButtons();
-            
-            // Load template
-            if (handler.hasFile("template.cpp")) {
-                currentTemplate_ = QString::fromUtf8(handler.getFile("template.cpp"));
-            } else {
-                currentTemplate_ = loadDefaultTemplate();
-            }
-            
-            // Load problem metadata
-            problemEdited_ = false;
-            if (handler.hasFile("problem.json")) {
-                const QByteArray problemBytes = handler.getFile("problem.json");
-                currentProblemRaw_ = QString::fromUtf8(problemBytes);
-                QJsonParseError parseError;
-                QJsonDocument problemDoc = QJsonDocument::fromJson(
-                    problemBytes, &parseError);
-                if (parseError.error == QJsonParseError::NoError) {
-                    currentProblem_ = problemDoc.object();
-                }
-            } else {
-                currentProblem_ = problem;
-                currentProblemRaw_ = QString::fromUtf8(
-                    QJsonDocument(problem).toJson(QJsonDocument::Indented));
-            }
-
-            currentFilePath_ = cpackPath;
-            hasSavedFile_ = true;
-            
-            // Load test cases from file (they might have been modified)
-            clearAllTestCases();
-            testcasesEdited_ = false;
-            if (handler.hasFile("testcases.json")) {
-                const QByteArray testsBytes = handler.getFile("testcases.json");
-                currentTestcasesRaw_ = QString::fromUtf8(testsBytes);
-                QJsonParseError parseError;
-                QJsonDocument testsDoc = QJsonDocument::fromJson(
-                    testsBytes, &parseError);
-                if (parseError.error == QJsonParseError::NoError) {
-                    QJsonObject testsObj = testsDoc.object();
-                    QJsonArray testsArray = testsObj["tests"].toArray();
-                    if (testsObj.contains("timeout")) {
-                        currentTimeout_ = testsObj["timeout"].toInt(5);
-                    }
-                    for (const QJsonValue &testVal : testsArray) {
-                        QJsonObject test = testVal.toObject();
-                        addTestCase();
-                        if (!caseWidgets_.empty()) {
-                            auto &widgets = caseWidgets_.back();
-                            if (widgets.inputEditor) {
-                                widgets.inputEditor->setPlainText(test["input"].toString());
-                            }
-                            if (widgets.expectedEditor) {
-                                widgets.expectedEditor->setPlainText(test["output"].toString());
-                            }
-                        }
-                    }
-                }
-            } else {
-                currentTestcasesRaw_.clear();
-            }
-            
-            // Switch to editor view
-            if (mainStack_) {
-                mainStack_->setCurrentWidget(mainSplitter_);
-            }
-            
+            loadCpackFromHandler(handler, cpackPath, true);
             baseWindowTitle_ = QString("CF Dojo - %1").arg(problemName);
             setDirty(false);
             raise();
@@ -2800,11 +3403,6 @@ void MainWindow::onProblemReceived(const QJsonObject &problem) {
         QJsonDocument(problem).toJson(QJsonDocument::Indented));
     problemEdited_ = false;
     
-    // Switch to editor view
-    if (mainStack_) {
-        mainStack_->setCurrentWidget(mainSplitter_);
-    }
-    
     // Clear existing content
     DirtyScope guard(this);
     if (codeEditor_) {
@@ -2818,6 +3416,8 @@ void MainWindow::onProblemReceived(const QJsonObject &problem) {
     currentTemplate_ = loadDefaultTemplate();
     currentTestcasesRaw_.clear();
     testcasesEdited_ = false;
+    currentTimeout_ = 5;
+    updateProblemMetaUi();
     
     // Clear existing test cases and add new ones from problem
     clearAllTestCases();
@@ -2848,6 +3448,9 @@ void MainWindow::onProblemReceived(const QJsonObject &problem) {
         addTestCase();
     }
     currentTestcasesRaw_ = buildTestcasesJson();
+
+    updateTemplateAvailability();
+    updateEditorModeButtons();
     
     // Update window title with problem name
     if (!problemName.isEmpty()) {

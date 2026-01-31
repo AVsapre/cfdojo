@@ -16,12 +16,16 @@ add_executable(CFDojo
     src/app/ActivityBarButton.h
     src/app/CollapsibleSplitter.cpp
     src/app/CollapsibleSplitter.h
+    src/app/HomeWindow.cpp
+    src/app/HomeWindow.h
     src/app/LandingButton.cpp
     src/app/LandingButton.h
     src/app/MainWindow.cpp
     src/app/MainWindow.h
     src/app/SettingsDialog.cpp
     src/app/SettingsDialog.h
+    src/app/TrainerWindow.cpp
+    src/app/TrainerWindow.h
     src/editor/EditorConfigurator.cpp
     src/editor/EditorConfigurator.h
     src/editor/EditorPlaceholder.cpp

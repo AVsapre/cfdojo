@@ -63,6 +63,13 @@ void ActivityBarButton::updateIcon() {
 
     QPixmap basePixmap = QIcon(iconPath_).pixmap(pixmapSize);
     if (basePixmap.isNull()) {
+        basePixmap = QPixmap(iconPath_);
+        if (!basePixmap.isNull() && basePixmap.size() != pixmapSize) {
+            basePixmap = basePixmap.scaled(
+                pixmapSize, Qt::KeepAspectRatio, Qt::SmoothTransformation);
+        }
+    }
+    if (basePixmap.isNull()) {
         return;
     }
     basePixmap.setDevicePixelRatio(dpr);

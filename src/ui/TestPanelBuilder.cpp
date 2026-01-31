@@ -14,17 +14,6 @@
 #include <QSplitter>
 #include <QVBoxLayout>
 
-namespace {
-
-// Scroll area with zero minimum size to allow proper collapsing
-class FlexibleScrollArea : public QScrollArea {
-public:
-    explicit FlexibleScrollArea(QWidget *parent = nullptr) : QScrollArea(parent) {}
-    QSize minimumSizeHint() const override { return QSize(0, 0); }
-};
-
-} // namespace
-
 TestPanelBuilder::PanelWidgets TestPanelBuilder::build(QWidget *parent,
                                                        QObject * /*context*/,
                                                        const QColor &iconColor) {
@@ -51,8 +40,19 @@ TestPanelBuilder::PanelWidgets TestPanelBuilder::build(QWidget *parent,
     titleLayout->addWidget(titleLabel);
     layout->addWidget(titleRow);
 
+    auto *metaRow = new QWidget(panel);
+    auto *metaLayout = new QHBoxLayout(metaRow);
+    metaLayout->setContentsMargins(12, 0, 12, 0);
+    metaLayout->setSpacing(0);
+    widgets.metaLabel = new QLabel(metaRow);
+    widgets.metaLabel->setObjectName("TestMetaLabel");
+    widgets.metaLabel->setAlignment(Qt::AlignLeft | Qt::AlignVCenter);
+    widgets.metaLabel->setText("TL -  ML -");
+    metaLayout->addWidget(widgets.metaLabel);
+    layout->addWidget(metaRow);
+
     // Scrollable test cases area
-    FlexibleScrollArea *scrollArea = new FlexibleScrollArea(panel);
+    QScrollArea *scrollArea = new QScrollArea(panel);
     scrollArea->setObjectName("CasesScroll");
     scrollArea->setWidgetResizable(true);
     scrollArea->setFrameShape(QFrame::NoFrame);

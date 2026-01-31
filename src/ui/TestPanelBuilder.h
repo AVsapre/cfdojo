@@ -35,6 +35,7 @@ public:
         QWidget *casesContainer = nullptr;
         QVBoxLayout *casesLayout = nullptr;
         QLabel *summaryLabel = nullptr;
+        QLabel *metaLabel = nullptr;
         QPushButton *runAllButton = nullptr;
         QPushButton *addButton = nullptr;
         QPushButton *clearCasesButton = nullptr;

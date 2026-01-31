@@ -7,6 +7,7 @@ class QCheckBox;
 class QComboBox;
 class QTabWidget;
 class QLineEdit;
+class QSpinBox;
 
 class SettingsDialog : public QWidget {
     Q_OBJECT
@@ -44,6 +45,8 @@ public:
     // General settings
     void setRootDir(const QString &path);
     QString rootDir() const;
+    void setAutosaveIntervalSeconds(int seconds);
+    int autosaveIntervalSeconds() const;
 
     // Experimental settings
     void setMultithreadingEnabled(bool enabled);
@@ -69,16 +72,14 @@ private:
     QWidget* createLanguagesTab();
     QWidget* createExperimentalTab();
     QWidget* createAboutTab();
-    void openTemplateEditorDialog();
-    void updateTemplateSummary();
 
     QTabWidget *tabWidget_ = nullptr;
     
     // General tab
     QLineEdit *rootDirEdit_ = nullptr;
+    QSpinBox *autosaveIntervalSpin_ = nullptr;
     
     // Template tab
-    QLineEdit *templateSummaryEdit_ = nullptr;
     QCheckBox *transcludeTemplateCheckbox_ = nullptr;
     QString templateText_;
     
