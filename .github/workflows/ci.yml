@@ -2,6 +2,129 @@ name: CI
 
 on:
   push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            host: linux
+          - os: macos-latest
+            host: mac
+          - os: windows-latest
+            host: windows
+        fail-fast: false
+    runs-on: ${{ matrix.os }}
+    name: Build on ${{ matrix.os }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Qt
+        uses: qt-actions/setup-qt@v2
+        with:
+          version: '6.5.2'
+          host: ${{ matrix.host }}
+
+      - name: Configure CMake
+        run: |
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build
+        run: |
+          cmake --build build --config Release -- -j
+
+      - name: Package Linux AppImage
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y patchelf libglu1-mesa-dev
+          BIN=$(ls build/*/CFDojo build/CFDojo build/Release/CFDojo 2>/dev/null | head -n1)
+          if [ -z "$BIN" ]; then echo "Binary not found" ; exit 1; fi
+          mkdir -p AppDir/usr/bin
+          cp "$BIN" AppDir/usr/bin/
+          cat > AppDir/CFDojo.desktop <<'EOF'
+[Desktop Entry]
+Name=CFDojo
+Exec=CFDojo
+Type=Application
+Categories=Development;
+EOF
+          if [ -f images/icon.png ]; then
+            mkdir -p AppDir/usr/share/icons/hicolor/256x256/apps
+            cp images/icon.png AppDir/usr/share/icons/hicolor/256x256/apps/CFDojo.png
+          fi
+          curl -L -o linuxdeployqt.AppImage https://github.com/probonopd/linuxdeployqt/releases/download/continuous/linuxdeployqt-continuous-x86_64.AppImage
+          chmod +x linuxdeployqt.AppImage
+          ./linuxdeployqt.AppImage AppDir/usr/bin/CFDojo -appimage
+
+      - name: Upload Linux AppImage
+        if: matrix.os == 'ubuntu-latest'
+        uses: actions/upload-artifact@v4
+        with:
+          name: CFDojo-AppImage
+          path: '*.AppImage'
+
+      - name: Package macOS DMG
+        if: matrix.os == 'macos-latest'
+        run: |
+          APP=$(ls build/*.app build/Release/*.app 2>/dev/null | head -n1)
+          if [ -z "$APP" ]; then echo "App bundle not found" ; exit 1; fi
+          "$QTDIR/bin/macdeployqt" "$APP"
+          hdiutil create -volname CFDojo -srcfolder "$APP" -ov -format UDZO CFDojo.dmg
+
+      - name: Upload macOS DMG
+        if: matrix.os == 'macos-latest'
+        uses: actions/upload-artifact@v4
+        with:
+          name: CFDojo-DMG
+          path: CFDojo.dmg
+
+      - name: Package Windows EXE installer
+        if: matrix.os == 'windows-latest'
+        shell: bash
+        run: |
+          BIN=$(powershell -Command "Get-ChildItem -Path build -Recurse -Filter CFDojo.exe -ErrorAction SilentlyContinue | Select-Object -First 1 -Expand FullName" )
+          if [ -z "$BIN" ]; then echo "Binary not found" ; exit 1; fi
+          "${QTDIR}/bin/windeployqt.exe" "$BIN"
+          choco install nsis -y
+          mkdir -p installer_files
+          cp -r "$(dirname "$BIN")"/* installer_files/
+          cat > installer.nsi <<'NSI'
+OutFile "CFDojo-Installer.exe"
+InstallDir "$PROGRAMFILES\\CFDojo"
+!include "MUI2.nsh"
+Name "CFDojo"
+Section "Install"
+  SetOutPath "$INSTDIR"
+  File /r "installer_files\\*"
+  CreateShortCut "$SMPROGRAMS\\CFDojo.lnk" "$INSTDIR\\CFDojo.exe"
+SectionEnd
+NSI
+          makensis installer.nsi
+
+      - name: Upload Windows EXE
+        if: matrix.os == 'windows-latest'
+        uses: actions/upload-artifact@v4
+        with:
+          name: CFDojo-Installer
+          path: CFDojo-Installer.exe
+
+      - name: Upload build artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-${{ matrix.os }}
+          path: build
+name: CI
+
+on:
+  push:
   pull_request:
 
 jobs:
