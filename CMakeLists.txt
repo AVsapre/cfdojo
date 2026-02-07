@@ -21,6 +21,7 @@ endif()
 include(CTest)
 
 add_executable(CFDojo
+    WIN32 MACOSX_BUNDLE
     src/app/ActivityBarButton.cpp
     src/app/ActivityBarButton.h
     src/app/CollapsibleSplitter.cpp

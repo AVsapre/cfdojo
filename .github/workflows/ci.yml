@@ -52,11 +52,20 @@ jobs:
           if [ -z "$BIN" ]; then echo "Binary not found"; exit 1; fi
           mkdir -p AppDir/usr/bin
           cp "$BIN" AppDir/usr/bin/
-          printf '[Desktop Entry]\nName=CFDojo\nExec=CFDojo\nType=Application\nCategories=Development;\n' > AppDir/CFDojo.desktop
+          printf '[Desktop Entry]\nName=CFDojo\nExec=CFDojo\nIcon=CFDojo\nType=Application\nCategories=Development;\n' > AppDir/CFDojo.desktop
+          # Provide an application icon (required by appimagetool)
           if [ -f src/images/icon.png ]; then
-            mkdir -p AppDir/usr/share/icons/hicolor/256x256/apps
-            cp src/images/icon.png AppDir/usr/share/icons/hicolor/256x256/apps/CFDojo.png
+            ICON=src/images/icon.png
+          else
+            # Generate a minimal 256x256 placeholder icon
+            sudo apt-get install -y imagemagick
+            convert -size 256x256 xc:'#2979ff' -gravity center \
+              -pointsize 72 -fill white -annotate 0 'CF' placeholder_icon.png
+            ICON=placeholder_icon.png
           fi
+          mkdir -p AppDir/usr/share/icons/hicolor/256x256/apps
+          cp "$ICON" AppDir/usr/share/icons/hicolor/256x256/apps/CFDojo.png
+          cp "$ICON" AppDir/CFDojo.png
 
       - name: Build AppImage
         if: matrix.os == 'ubuntu-22.04'
@@ -78,7 +87,7 @@ jobs:
         run: |
           APP=$(find build -maxdepth 2 -name '*.app' -type d | head -n1)
           if [ -z "$APP" ]; then echo "App bundle not found"; exit 1; fi
-          "${QTDIR}/bin/macdeployqt" "$APP"
+          "${QT_ROOT_DIR}/bin/macdeployqt" "$APP"
           hdiutil create -volname CFDojo -srcfolder "$APP" -ov -format UDZO CFDojo.dmg
 
       - name: Upload macOS DMG
@@ -95,7 +104,7 @@ jobs:
         run: |
           $bin = Get-ChildItem -Path build -Recurse -Filter CFDojo.exe -ErrorAction SilentlyContinue | Select-Object -First 1
           if (-not $bin) { Write-Error "Binary not found"; exit 1 }
-          & "${env:QTDIR}\bin\windeployqt.exe" $bin.FullName
+          & "${env:QT_ROOT_DIR}\bin\windeployqt.exe" $bin.FullName
           choco install nsis -y
           New-Item -ItemType Directory -Force -Path installer_files | Out-Null
           Copy-Item -Path (Join-Path $bin.DirectoryName '*') -Destination installer_files -Recurse
