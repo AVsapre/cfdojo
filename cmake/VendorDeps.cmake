@@ -35,15 +35,19 @@ set(_QS_SCI_SRC "${_QS_SCINTILLA}/src")
 set(_QS_SCI_INC "${_QS_SCINTILLA}/include")
 
 file(GLOB _QS_WIDGET_SRCS  "${_QS_SRC}/*.cpp")
-file(GLOB _QS_LEXLIB_SRCS  "${_QS_LEXLIB}/*.cxx")
-file(GLOB _QS_LEXERS_SRCS  "${_QS_LEXERS}/*.cxx")
-file(GLOB _QS_SCI_SRCS     "${_QS_SCI_SRC}/*.cxx")
+file(GLOB _QS_WIDGET_HDRS  "${_QS_SRC}/*.h")
+file(GLOB _QS_QSCI_HDRS   "${_QS_SRC}/Qsci/*.h")
+file(GLOB _QS_LEXLIB_SRCS  "${_QS_LEXLIB}/*.cpp")
+file(GLOB _QS_LEXERS_SRCS  "${_QS_LEXERS}/*.cpp")
+file(GLOB _QS_SCI_SRCS     "${_QS_SCI_SRC}/*.cpp")
 
 # Remove sources that need Qt6::PrintSupport (not required for CF Dojo)
 list(FILTER _QS_WIDGET_SRCS EXCLUDE REGEX "qsciprinter\\.cpp$")
 
 add_library(QScintilla_Vendor STATIC
     ${_QS_WIDGET_SRCS}
+    ${_QS_WIDGET_HDRS}
+    ${_QS_QSCI_HDRS}
     ${_QS_LEXLIB_SRCS}
     ${_QS_LEXERS_SRCS}
     ${_QS_SCI_SRCS}
