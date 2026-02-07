@@ -12,7 +12,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: ubuntu-latest
+          - os: ubuntu-22.04
             host: linux
           - os: macos-latest
             host: mac
@@ -40,13 +40,13 @@ jobs:
 
       # ── Linux: AppImage ──────────────────────────────────────────
       - name: Install Linux packaging deps
-        if: matrix.os == 'ubuntu-latest'
+        if: matrix.os == 'ubuntu-22.04'
         run: |
           sudo apt-get update
           sudo apt-get install -y patchelf libglu1-mesa-dev
 
       - name: Create AppDir structure
-        if: matrix.os == 'ubuntu-latest'
+        if: matrix.os == 'ubuntu-22.04'
         run: |
           BIN=$(find build -maxdepth 2 -name CFDojo -type f | head -n1)
           if [ -z "$BIN" ]; then echo "Binary not found"; exit 1; fi
@@ -59,14 +59,14 @@ jobs:
           fi
 
       - name: Build AppImage
-        if: matrix.os == 'ubuntu-latest'
+        if: matrix.os == 'ubuntu-22.04'
         run: |
           curl -L -o linuxdeployqt.AppImage https://github.com/probonopd/linuxdeployqt/releases/download/continuous/linuxdeployqt-continuous-x86_64.AppImage
           chmod +x linuxdeployqt.AppImage
           ./linuxdeployqt.AppImage AppDir/usr/bin/CFDojo -appimage
 
       - name: Upload Linux AppImage
-        if: matrix.os == 'ubuntu-latest'
+        if: matrix.os == 'ubuntu-22.04'
         uses: actions/upload-artifact@v4
         with:
           name: CFDojo-AppImage
