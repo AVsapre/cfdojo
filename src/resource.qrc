@@ -3,8 +3,6 @@
         <file alias="style.qss">theme/style.qss</file>
         <file alias="keywords.txt">editor/keywords.txt</file>
         <file alias="images/testcase.svg">images/testcase.svg</file>
-        <file alias="images/battle.svg">images/battle.svg</file>
-        <file alias="images/train.svg">images/train.svg</file>
         <file alias="images/settings.svg">images/settings.svg</file>
         <file alias="images/arrow-left.svg">images/arrow-left.svg</file>
         

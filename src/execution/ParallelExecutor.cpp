@@ -5,6 +5,7 @@
 #include <QFile>
 #include <QProcess>
 #include <QList>
+#include <QRegularExpression>
 #include <QStringConverter>
 #include <QTemporaryDir>
 #include <QTextStream>
@@ -49,11 +50,51 @@ void ParallelExecutor::setTemplate(const QString &tmpl) {
 }
 
 QString ParallelExecutor::applyTransclusion(const QString &solution) const {
+    if (!transcludeTemplate_) {
+        return solution;
+    }
     if (template_.contains("//#main")) {
         QString result = template_;
         return result.replace("//#main", solution);
     }
     return solution;
+}
+
+QString ParallelExecutor::normalizedLanguage() const {
+    const QString normalized = language_.trimmed().toLower();
+    if (normalized == "python" || normalized == "py") {
+        return "Python";
+    }
+    if (normalized == "java") {
+        return "Java";
+    }
+    return "C++";
+}
+
+QString ParallelExecutor::detectJavaMainClass(const QString &code) const {
+    const QRegularExpression publicClassPattern(
+        "\\bpublic\\s+class\\s+([A-Za-z_][A-Za-z0-9_]*)\\b");
+    QRegularExpressionMatch match = publicClassPattern.match(code);
+    if (match.hasMatch()) {
+        return match.captured(1);
+    }
+
+    const QRegularExpression classPattern(
+        "\\bclass\\s+([A-Za-z_][A-Za-z0-9_]*)\\b");
+    match = classPattern.match(code);
+    if (match.hasMatch()) {
+        return match.captured(1);
+    }
+
+    return "Solution";
+}
+
+QStringList ParallelExecutor::splitArgs(const QString &args) const {
+    const QString trimmed = args.trimmed();
+    if (trimmed.isEmpty()) {
+        return {};
+    }
+    return QProcess::splitCommand(trimmed);
 }
 
 void ParallelExecutor::runAll(const std::vector<TestInput> &tests) {
@@ -66,30 +107,35 @@ void ParallelExecutor::runAll(const std::vector<TestInput> &tests) {
     
     emit compilationStarted();
     
-    // Compile first (on main thread to set up temp dir)
-    if (!compile()) {
-        running_ = false;
-        return;
-    }
-    
-    emit compilationFinished(true, QString());
-    
-    // Run tests in parallel using QtConcurrent
-    QList<TestInput> testList(tests.begin(), tests.end());
-    expectedResults_ = static_cast<int>(tests.size());
-    results_.assign(static_cast<size_t>(expectedResults_), TestResult{});
+    // Run compilation on a background thread to avoid blocking the GUI
+    std::vector<TestInput> testsCopy = tests;
+    auto compileFuture = QtConcurrent::run([this, testsCopy]() {
+        if (!compile()) {
+            running_ = false;
+            return;
+        }
 
-    auto future = QtConcurrent::mapped(testList,
-        [this](const TestInput &test) -> TestResult {
-            if (cancelled_) {
-                TestResult r;
-                r.testIndex = test.testIndex;
-                r.error = "Cancelled";
-                return r;
-            }
-            return runSingleTest(test);
-        });
-    watcher_->setFuture(future);
+        QMetaObject::invokeMethod(this, [this, testsCopy]() {
+            emit compilationFinished(true, QString());
+
+            // Run tests in parallel using QtConcurrent
+            QList<TestInput> testList(testsCopy.begin(), testsCopy.end());
+            expectedResults_ = static_cast<int>(testsCopy.size());
+            results_.assign(static_cast<size_t>(expectedResults_), TestResult{});
+
+            auto future = QtConcurrent::mapped(testList,
+                [this](const TestInput &test) -> TestResult {
+                    if (cancelled_) {
+                        TestResult r;
+                        r.testIndex = test.testIndex;
+                        r.error = "Cancelled";
+                        return r;
+                    }
+                    return runSingleTest(test);
+                });
+            watcher_->setFuture(future);
+        }, Qt::QueuedConnection);
+    });
 }
 
 bool ParallelExecutor::compile() {
@@ -101,11 +147,24 @@ bool ParallelExecutor::compile() {
     }
     
     const QString tempPath = tempDir_->path();
-    const QString sourcePath = QDir(tempPath).filePath("solution.cpp");
-    executablePath_ = QDir(tempPath).filePath("solution");
-    
-    // Write source code with transclusion
     const QString code = applyTransclusion(sourceCode_);
+    const QString language = normalizedLanguage();
+    const QString sourceExt = language == "Python" ? "py"
+                           : language == "Java"   ? "java"
+                                                   : "cpp";
+    const QString sourceBaseName =
+        language == "Java" ? detectJavaMainClass(code) : "solution";
+    const QString sourcePath =
+        QDir(tempPath).filePath(QString("%1.%2").arg(sourceBaseName, sourceExt));
+#ifdef Q_OS_WIN
+    executablePath_ = QDir(tempPath).filePath("solution.exe");
+#else
+    executablePath_ = QDir(tempPath).filePath("solution");
+#endif
+
+    runProgram_.clear();
+    runArgs_.clear();
+
     QFile file(sourcePath);
     if (!file.open(QIODevice::WriteOnly | QIODevice::Text)) {
         emit compilationFinished(false, "Failed to write source file");
@@ -117,17 +176,32 @@ bool ParallelExecutor::compile() {
     out << code;
     file.close();
     
-    // Compile
+    if (language == "Python") {
+#ifdef Q_OS_WIN
+        const QString defaultPython = "python";
+#else
+        const QString defaultPython = "python3";
+#endif
+        runProgram_ = pythonPath_.trimmed().isEmpty() ? defaultPython : pythonPath_.trimmed();
+        runArgs_ = splitArgs(pythonArgs_);
+        runArgs_ << sourcePath;
+        return true;
+    }
+
     QProcess compiler;
     compiler.setWorkingDirectory(tempPath);
-    
-    QStringList args;
-    if (!compilerFlags_.isEmpty()) {
-        args = compilerFlags_.split(' ', Qt::SkipEmptyParts);
+
+    if (language == "Java") {
+        const QString javacPath =
+            javaCompilerPath_.trimmed().isEmpty() ? "javac" : javaCompilerPath_.trimmed();
+        compiler.start(javacPath, {sourcePath});
+    } else {
+        QStringList args = splitArgs(compilerFlags_);
+        args << sourcePath << "-o" << executablePath_;
+        const QString compilerPath =
+            compilerPath_.trimmed().isEmpty() ? "g++" : compilerPath_.trimmed();
+        compiler.start(compilerPath, args);
     }
-    args << "-o" << executablePath_ << sourcePath;
-    
-    compiler.start(compilerPath_, args);
     if (!compiler.waitForFinished(30000)) {
         emit compilationFinished(false, "Compilation timed out");
         return false;
@@ -139,6 +213,14 @@ bool ParallelExecutor::compile() {
         return false;
     }
     
+    if (language == "Java") {
+        runProgram_ = javaRunPath_.trimmed().isEmpty() ? "java" : javaRunPath_.trimmed();
+        runArgs_ = splitArgs(javaArgs_);
+        runArgs_ << "-cp" << tempPath << sourceBaseName;
+    } else {
+        runProgram_ = executablePath_;
+    }
+
     return true;
 }
 
@@ -149,8 +231,15 @@ TestResult ParallelExecutor::runSingleTest(const TestInput &test) {
     QElapsedTimer timer;
     timer.start();
     
+    if (runProgram_.isEmpty()) {
+        result.error = "Execution command is not configured";
+        result.exitCode = -1;
+        return result;
+    }
+
     QProcess process;
-    process.start(executablePath_, {});
+    process.setWorkingDirectory(tempDir_ ? tempDir_->path() : QString());
+    process.start(runProgram_, runArgs_);
     
     if (!process.waitForStarted(1000)) {
         result.error = "Failed to start process";

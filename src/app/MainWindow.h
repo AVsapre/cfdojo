@@ -33,7 +33,6 @@ class QLineEdit;
 class QStandardItemModel;
 class QStandardItem;
 class QCloseEvent;
-class QShowEvent;
 class CpackFileHandler;
 template <typename T>
 class QFutureWatcher;
@@ -50,11 +49,9 @@ public:
     explicit MainWindow(QWidget *parent = nullptr);
     ~MainWindow() override;
     void setBaseWindowTitle(const QString &title);
-    void startPlainTextSession(const QString &title);
 
 protected:
     void closeEvent(QCloseEvent *event) override;
-    void showEvent(QShowEvent *event) override;
 
 private slots:
     void zoomIn();
@@ -99,19 +96,20 @@ private:
     void setupZoomShortcuts();
     void setupCompanionListener();
     void applyUiZoom();
+    void showBottomToast(const QString &message);
     void showCopyToast();
     void markDirty();
     void setDirty(bool dirty);
     void saveFileAsWithTitle(const QString &title);
-    void openPlainFileWithPrompt(const QString &path);
     void populateCpackTree();
-    void setPlainTextMode(bool enabled);
     void runStressTest();
     StressResult runStressTestWorker(int count,
                                      const QString &solution,
                                      const QString &brute,
                                      const QString &generator,
                                      const QString &tmpl,
+                                     const QString &compilerPath,
+                                     const QString &compilerFlags,
                                      int timeoutMs,
                                      bool parallel) const;
     QString normalizeText(const QString &text) const;
@@ -139,11 +137,9 @@ private:
     void scheduleAutosave();
     void performAutosave();
     void clearAutosaveFiles();
-    void checkForRecovery();
     QString autosaveDir() const;
     QString autosaveCpackPath() const;
     QString autosaveMetaPath() const;
-    QString autosaveSessionPath() const;
     void loadCpackFromHandler(const CpackFileHandler &handler,
                               const QString &path,
                               bool markSavedFile);
@@ -153,6 +149,11 @@ private:
     void updateTemplateAvailability();
     void updateTemplateMarkerVisibility();
     void syncTemplateToggleUi();
+    void loadRuntimeSettings();
+    void applyRuntimeSettings();
+    void applyFileExplorerRootDirectory(const QString &path);
+    QString languageForPath(const QString &path) const;
+    void setCurrentLanguage(const QString &language);
 
     // Core managers
     ThemeManager themeManager_;
@@ -174,9 +175,6 @@ private:
     ActivityBarButton *backButton_ = nullptr;
     QPushButton *menuTemplateButton_ = nullptr;
     QPushButton *menuRunAllButton_ = nullptr;
-    QWidget *plainTextBanner_ = nullptr;
-    QLabel *plainTextBannerLabel_ = nullptr;
-    QPushButton *plainTextConvertButton_ = nullptr;
 
     // Editor area
     QWidget *sidePanel_ = nullptr;
@@ -212,7 +210,6 @@ private:
     QLabel *copyToastLabel_ = nullptr;
     QTimer *copyToastTimer_ = nullptr;
     QTimer *autosaveTimer_ = nullptr;
-    bool recoveryChecked_ = false;
 
     // Zoom
     double uiScale_ = 1.0;
@@ -249,15 +246,24 @@ private:
     
     // Experimental settings
     bool multithreadingEnabled_ = false;
+    bool defaultTranscludeTemplateEnabled_ = false;
     bool transcludeTemplateEnabled_ = false;
     int autosaveIntervalMs_ = 15000;
+    QString defaultLanguage_ = "C++";
+    QString currentLanguage_ = "C++";
+    QString cppCompilerPath_ = "g++";
+    QString cppCompilerFlags_ = "-O2 -std=c++17";
+    QString pythonPath_ = "python3";
+    QString pythonArgs_;
+    QString javaCompilerPath_ = "javac";
+    QString javaRunPath_ = "java";
+    QString javaArgs_;
+    QString fileExplorerRootDir_;
 
     // Dirty state
     bool isDirty_ = false;
     int dirtySuppressionDepth_ = 0;
     bool hasSavedFile_ = false;
-    bool plainTextMode_ = false;
-    bool wasSidePanelCollapsed_ = false;
 
     // Sequential run-all state
     std::deque<int> runAllQueue_;

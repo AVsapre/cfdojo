@@ -51,8 +51,14 @@ void EditorConfigurator::setupEditor(const ThemeManager &theme) {
     const QColor bg = theme.backgroundColor();
     const QColor fg = theme.textColor();
 
-    // Setup font
+    // Setup font — use platform-appropriate monospace font
+#ifdef Q_OS_WIN
     QFont font("Consolas", 11);
+#elif defined(Q_OS_MAC)
+    QFont font("Menlo", 11);
+#else
+    QFont font("Monospace", 11);
+#endif
     font.setStyleHint(QFont::Monospace);
     font.setFixedPitch(true);
     baseFont_ = font;

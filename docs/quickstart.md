@@ -4,21 +4,23 @@ CF Dojo is a local competitive programming IDE focused on fast testing, stress c
 
 ## Getting started
 
-1. **Open or import a problem**
+1. **Start in the editor**
+   - CF Dojo opens directly into the main IDE window.
+2. **Open or import a problem**
    - Use **File → Open** for a `.cpack`, or
    - Use Competitive Companion to send a problem directly.
-2. **Write your solution**
+3. **Write your solution**
    - Edit `solution.cpp` in the main editor.
-3. **Run tests**
+4. **Run tests**
    - Use **Run All** to validate all test cases.
-4. **Stress test**
+5. **Stress test**
    - Provide `brute.cpp` + `generator.cpp`, then run stress testing.
 
 ## File format (.cpack)
 
 `.cpack` is a single problem archive. It stores:
 
-- `soluiton.cpp` (solution code; legacy spelling)
+- `solution.cpp` (solution code)
 - `template.cpp` (optional, contains `//#main`)
 - `brute.cpp` and `generator.cpp` (optional, for stress tests)
 - `problem.json` (metadata from Competitive Companion)
@@ -27,12 +29,12 @@ CF Dojo is a local competitive programming IDE focused on fast testing, stress c
 ## Core workflow
 
 ### New / Open / Save
-- **New** creates a blank problem and asks where to save the `.cpack`.
-- **Open** supports `.cpack` and plain text files.
+- **New** asks for language (`C++`, `Java`, `Python`) and then asks where to save the `.cpack`.
+- **Open** supports `.cpack` and plain text files, and auto-detects language from common extensions.
 - **Save** writes a `.cpack`. If you opened a text file, you can convert to `.cpack` at any time.
 
 ### Plain text mode
-Opening a non‑`.cpack` file puts the app in **plain text mode** (limited features).
+Opening a non-`.cpack` file puts the app in **plain text mode** (limited features).
 Use the banner in the editor to **Convert to CPack** when you want templates and tests.
 
 ### Test cases
@@ -50,6 +52,7 @@ Provide:
 ### Templates
 `template.cpp` can include `//#main` to insert your solution.
 If transclusion is enabled and the marker is missing, the app will warn you.
+The setting **Template view enabled by default** only affects newly created/opened files; it does not change the current file immediately.
 
 ### Copy solution
 The **copy** button builds the final output using the template and copies it to the clipboard.

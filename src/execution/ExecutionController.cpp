@@ -1,6 +1,5 @@
 #include "execution/ExecutionController.h"
 
-#include <QDebug>
 #include <QDir>
 #include <QFile>
 #include <QIcon>
@@ -9,6 +8,7 @@
 #include <QPlainTextEdit>
 #include <QProcess>
 #include <QPushButton>
+#include <QRegularExpression>
 #include <QSize>
 #include <QSplitter>
 #include <QStyle>
@@ -17,7 +17,7 @@
 #include <QTextStream>
 #include <QTimer>
 #include <Qsci/qsciscintilla.h>
-#include <signal.h>
+#include <csignal>
 
 ExecutionController::ExecutionController(QObject *parent)
     : QObject(parent),
@@ -93,7 +93,6 @@ void ExecutionController::runWithBindings(const UiBindings &bindings) {
     updateRunButtonForState(state_);
     
     if (state_ != State::Idle) {
-        qDebug() << "Execution already in progress";
         return;
     }
     
@@ -162,6 +161,43 @@ void ExecutionController::setIconTintColor(const QColor &color) {
     updateRunButtonForState(state_);
 }
 
+QString ExecutionController::normalizedLanguage() const {
+    const QString normalized = language_.trimmed().toLower();
+    if (normalized == "python" || normalized == "py") {
+        return "Python";
+    }
+    if (normalized == "java") {
+        return "Java";
+    }
+    return "C++";
+}
+
+QStringList ExecutionController::splitArgs(const QString &args) const {
+    const QString trimmed = args.trimmed();
+    if (trimmed.isEmpty()) {
+        return {};
+    }
+    return QProcess::splitCommand(trimmed);
+}
+
+QString ExecutionController::detectJavaMainClass(const QString &code) const {
+    const QRegularExpression publicClassPattern(
+        "\\bpublic\\s+class\\s+([A-Za-z_][A-Za-z0-9_]*)\\b");
+    QRegularExpressionMatch match = publicClassPattern.match(code);
+    if (match.hasMatch()) {
+        return match.captured(1);
+    }
+
+    const QRegularExpression classPattern(
+        "\\bclass\\s+([A-Za-z_][A-Za-z0-9_]*)\\b");
+    match = classPattern.match(code);
+    if (match.hasMatch()) {
+        return match.captured(1);
+    }
+
+    return "Solution";
+}
+
 void ExecutionController::startCompilation() {
     setState(State::Compiling);
     updateStatus("Compiling...");
@@ -182,12 +218,25 @@ void ExecutionController::startCompilation() {
         return;
     }
 
-    // Write source code to file (with template transclusion)
     const QString solution = ui_.codeEditor ? ui_.codeEditor->text() : QString();
     const QString code = applyTransclusion(solution);
+    const QString language = normalizedLanguage();
     const QString tempPath = tempDir_->path();
-    const QString sourcePath = QDir(tempPath).filePath("solution.cpp");
+    const QString sourceExt = language == "Python" ? "py"
+                           : language == "Java"   ? "java"
+                                                   : "cpp";
+    const QString sourceBaseName =
+        language == "Java" ? detectJavaMainClass(code) : "solution";
+    const QString sourcePath =
+        QDir(tempPath).filePath(QString("%1.%2").arg(sourceBaseName, sourceExt));
+#ifdef Q_OS_WIN
+    const QString outputPath = QDir(tempPath).filePath("solution.exe");
+#else
     const QString outputPath = QDir(tempPath).filePath("solution");
+#endif
+
+    runProgram_.clear();
+    runArgs_.clear();
     QFile file(sourcePath);
     if (file.open(QIODevice::WriteOnly | QIODevice::Text)) {
         QTextStream out(&file);
@@ -205,7 +254,29 @@ void ExecutionController::startCompilation() {
         return;
     }
 
-    qDebug() << "Compiling...";
+
+
+    if (language == "Python") {
+#ifdef Q_OS_WIN
+        const QString defaultPython = "python";
+#else
+        const QString defaultPython = "python3";
+#endif
+        runProgram_ = pythonPath_.trimmed().isEmpty() ? defaultPython : pythonPath_.trimmed();
+        runArgs_ = splitArgs(pythonArgs_);
+        runArgs_ << sourcePath;
+        emit compilationSucceeded();
+        startExecution();
+        return;
+    }
+
+    if (language == "Java") {
+        runProgram_ = javaRunPath_.trimmed().isEmpty() ? "java" : javaRunPath_.trimmed();
+        runArgs_ = splitArgs(javaArgs_);
+        runArgs_ << "-cp" << tempPath << sourceBaseName;
+    } else {
+        runProgram_ = outputPath;
+    }
 
     // Kill any running compilation
     if (compilerProcess_->state() != QProcess::NotRunning) {
@@ -214,7 +285,17 @@ void ExecutionController::startCompilation() {
     }
 
     compilerProcess_->setWorkingDirectory(tempPath);
-    compilerProcess_->start("g++", {sourcePath, "-o", outputPath});
+    if (language == "Java") {
+        const QString javacPath =
+            javaCompilerPath_.trimmed().isEmpty() ? "javac" : javaCompilerPath_.trimmed();
+        compilerProcess_->start(javacPath, {sourcePath});
+    } else {
+        const QString compilerPath =
+            cppCompilerPath_.trimmed().isEmpty() ? "g++" : cppCompilerPath_.trimmed();
+        QStringList compileArgs = splitArgs(cppCompilerFlags_);
+        compileArgs << sourcePath << "-o" << outputPath;
+        compilerProcess_->start(compilerPath, compileArgs);
+    }
 }
 
 void ExecutionController::onCompilationFinished(int exitCode, QProcess::ExitStatus status) {
@@ -225,13 +306,10 @@ void ExecutionController::onCompilationFinished(int exitCode, QProcess::ExitStat
         return;
     }
     if (exitCode == 0 && status == QProcess::NormalExit) {
-        qDebug() << "Compilation succeeded";
         emit compilationSucceeded();
         startExecution();
     } else {
         const QString error = QString::fromUtf8(compilerProcess_->readAllStandardError());
-        qDebug() << "Compilation failed:" << error;
-        
         updateStatus("Compile Error");
         if (ui_.errorViewer) {
             ui_.errorViewer->setPlainText(error);
@@ -256,7 +334,7 @@ void ExecutionController::startExecution() {
         timeoutTimer_->start(timeoutMs_);
     }
     
-    qDebug() << "Running ./solution...";
+
 
     if (!tempDir_ || !tempDir_->isValid()) {
         updateStatus("Run Failed");
@@ -275,8 +353,19 @@ void ExecutionController::startExecution() {
         runProcess_->waitForFinished(1000);
     }
 
+    if (runProgram_.isEmpty()) {
+        updateStatus("Run Failed");
+        if (ui_.errorViewer) {
+            ui_.errorViewer->setPlainText("Execution command is not configured.");
+        }
+        updateOutputPanels(false, true);
+        setState(State::Idle);
+        cleanupTempDir();
+        return;
+    }
+
     runProcess_->setWorkingDirectory(tempDir_->path());
-    runProcess_->start("./solution");
+    runProcess_->start(runProgram_, runArgs_);
 }
 
 void ExecutionController::onRunFinished(int exitCode, QProcess::ExitStatus status) {
@@ -313,27 +402,37 @@ void ExecutionController::onRunFinished(int exitCode, QProcess::ExitStatus statu
         case SIGILL:
             signalName = "SIGILL";
             break;
+#ifdef SIGBUS
         case SIGBUS:
             signalName = "SIGBUS";
             break;
+#endif
+#ifdef SIGTRAP
         case SIGTRAP:
             signalName = "SIGTRAP";
             break;
+#endif
+#ifdef SIGKILL
         case SIGKILL:
             signalName = "SIGKILL";
             break;
+#endif
         case SIGTERM:
             signalName = "SIGTERM";
             break;
         case SIGINT:
             signalName = "SIGINT";
             break;
+#ifdef SIGPIPE
         case SIGPIPE:
             signalName = "SIGPIPE";
             break;
+#endif
+#ifdef SIGALRM
         case SIGALRM:
             signalName = "SIGALRM";
             break;
+#endif
 #ifdef SIGXCPU
         case SIGXCPU:
             signalName = "SIGXCPU";
@@ -520,13 +619,17 @@ QString ExecutionController::applyTransclusion(const QString &solution) const {
 }
 
 QString ExecutionController::normalizeText(const QString &text) const {
-    QString result = text;
-    result.replace("\r\n", "\n");
-    
-    // Remove trailing whitespace
-    while (!result.isEmpty() && result.back().isSpace()) {
-        result.chop(1);
+    QString normalized = text;
+    normalized.replace("\r\n", "\n");
+    normalized.replace("\r", "\n");
+    QStringList lines = normalized.split('\n');
+    while (!lines.isEmpty() && lines.last().trimmed().isEmpty()) {
+        lines.removeLast();
     }
-    
-    return result;
+    for (QString &line : lines) {
+        while (line.endsWith(' ') || line.endsWith('\t')) {
+            line.chop(1);
+        }
+    }
+    return lines.join('\n');
 }

@@ -4,6 +4,7 @@
 #include <QIcon>
 #include <QPainter>
 #include <QResizeEvent>
+#include <cmath>
 
 namespace {
 constexpr int kActivityIconSize = 32;
@@ -54,8 +55,13 @@ void ActivityBarButton::resizeEvent(QResizeEvent *event) {
     updateIcon();
 }
 
+void ActivityBarButton::setScale(double scale) {
+    scale_ = scale;
+    updateIcon();
+}
+
 void ActivityBarButton::updateIcon() {
-    const int targetIconSize = kActivityIconSize;
+    const int targetIconSize = static_cast<int>(std::round(kActivityIconSize * scale_));
     const qreal dpr = devicePixelRatioF();
 
     const QSize pixmapSize(static_cast<int>(targetIconSize * dpr),

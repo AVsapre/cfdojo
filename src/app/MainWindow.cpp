@@ -8,6 +8,7 @@
 #include "ui/FileExplorerBuilder.h"
 #include "ui/IconUtils.h"
 #include "ui/StressPanelBuilder.h"
+#include "Version.h"
 
 #include <Qsci/qsciscintilla.h>
 #include <QAction>
@@ -46,7 +47,6 @@
 #include <QDir>
 #include <QScreen>
 #include <QWindow>
-#include <QShowEvent>
 #include <QStringConverter>
 #include <QSizePolicy>
 #include <QStackedWidget>
@@ -73,6 +73,17 @@ QString loadDefaultTemplate() {
     QSettings settings("CF Dojo", "CF Dojo");
     const QString stored = settings.value("defaultTemplate").toString();
     return stored.isEmpty() ? kTemplateMarker : stored;
+}
+
+QString normalizeLanguageName(const QString &language) {
+    const QString normalized = language.trimmed().toLower();
+    if (normalized == "python" || normalized == "py") {
+        return "Python";
+    }
+    if (normalized == "java") {
+        return "Java";
+    }
+    return "C++";
 }
 
 struct RegressionResult {
@@ -211,12 +222,8 @@ MainWindow::MainWindow(QWidget *parent)
       parallelExecutor_(new ParallelExecutor(this)),
       baseAppFont_(qApp->font()) {
     currentTemplate_ = loadDefaultTemplate();
-    QSettings settings("CF Dojo", "CF Dojo");
-    transcludeTemplateEnabled_ = settings.value("transcludeTemplate", false).toBool();
-    const int autosaveSec = std::clamp(
-        settings.value("autosaveIntervalSec", 15).toInt(), 5, 300);
-    autosaveIntervalMs_ = autosaveSec * 1000;
-    executionController_->setTranscludeTemplateEnabled(transcludeTemplateEnabled_);
+    loadRuntimeSettings();
+    applyRuntimeSettings();
     themeManager_.apply(qApp, uiScale_);
     executionController_->setIconTintColor(themeManager_.textColor());
     setupUi();
@@ -224,6 +231,15 @@ MainWindow::MainWindow(QWidget *parent)
     setupCompanionListener();
     applyUiZoom();
     setupAutosave();
+
+    // Restore window geometry from previous session
+    {
+        QSettings settings("CF Dojo", "CF Dojo");
+        const QByteArray geo = settings.value("windowGeometry").toByteArray();
+        const QByteArray state = settings.value("windowState").toByteArray();
+        if (!geo.isEmpty()) restoreGeometry(geo);
+        if (!state.isEmpty()) restoreState(state);
+    }
     
     // Connect parallel executor signals
     connect(parallelExecutor_, &ParallelExecutor::testFinished,
@@ -285,35 +301,103 @@ MainWindow::MainWindow(QWidget *parent)
 
 MainWindow::~MainWindow() = default;
 
+void MainWindow::loadRuntimeSettings() {
+    QSettings settings("CF Dojo", "CF Dojo");
+    defaultTranscludeTemplateEnabled_ =
+        settings.value("transcludeTemplate", false).toBool();
+    transcludeTemplateEnabled_ = defaultTranscludeTemplateEnabled_;
+
+    const int autosaveSec = std::clamp(
+        settings.value("autosaveIntervalSec", 15).toInt(), 5, 300);
+    autosaveIntervalMs_ = autosaveSec * 1000;
+
+    defaultLanguage_ = normalizeLanguageName(
+        settings.value("defaultLanguage", "C++").toString());
+    currentLanguage_ = defaultLanguage_;
+    cppCompilerPath_ = settings.value("cppCompilerPath", "g++").toString();
+    cppCompilerFlags_ = settings.value("cppCompilerFlags", "-O2 -std=c++17").toString();
+    pythonPath_ = settings.value("pythonPath", "python3").toString();
+    pythonArgs_ = settings.value("pythonArgs", "").toString();
+    javaCompilerPath_ = settings.value("javaCompilerPath", "javac").toString();
+    javaRunPath_ = settings.value("javaRunPath", "java").toString();
+    javaArgs_ = settings.value("javaArgs", "").toString();
+
+    fileExplorerRootDir_ = settings.value("rootDir", QDir::currentPath()).toString();
+
+    uiScale_ = settings.value("uiScale", 1.0).toDouble();
+    uiScale_ = std::clamp(uiScale_, 0.7, 1.8);
+    if (fileExplorerRootDir_.trimmed().isEmpty() ||
+        !QFileInfo::exists(fileExplorerRootDir_) ||
+        !QFileInfo(fileExplorerRootDir_).isDir()) {
+        fileExplorerRootDir_ = QDir::currentPath();
+    }
+}
+
+void MainWindow::applyRuntimeSettings() {
+    const QString activeLanguage = normalizeLanguageName(currentLanguage_);
+    if (executionController_) {
+        executionController_->setTranscludeTemplateEnabled(transcludeTemplateEnabled_);
+        executionController_->setLanguage(activeLanguage);
+        executionController_->setCompilerPath(cppCompilerPath_);
+        executionController_->setCompilerFlags(cppCompilerFlags_);
+        executionController_->setPythonPath(pythonPath_);
+        executionController_->setPythonArgs(pythonArgs_);
+        executionController_->setJavaCompilerPath(javaCompilerPath_);
+        executionController_->setJavaRunPath(javaRunPath_);
+        executionController_->setJavaArgs(javaArgs_);
+    }
+    if (parallelExecutor_) {
+        parallelExecutor_->setTranscludeTemplateEnabled(transcludeTemplateEnabled_);
+        parallelExecutor_->setLanguage(activeLanguage);
+        parallelExecutor_->setCompilerPath(cppCompilerPath_);
+        parallelExecutor_->setCompilerFlags(cppCompilerFlags_);
+        parallelExecutor_->setPythonPath(pythonPath_);
+        parallelExecutor_->setPythonArgs(pythonArgs_);
+        parallelExecutor_->setJavaCompilerPath(javaCompilerPath_);
+        parallelExecutor_->setJavaRunPath(javaRunPath_);
+        parallelExecutor_->setJavaArgs(javaArgs_);
+    }
+}
+
+void MainWindow::applyFileExplorerRootDirectory(const QString &path) {
+    if (!fileModel_ || !fileTree_) {
+        return;
+    }
+    if (path.trimmed().isEmpty()) {
+        return;
+    }
+    if (!QFileInfo::exists(path) || !QFileInfo(path).isDir()) {
+        return;
+    }
+
+    fileModel_->setRootPath(path);
+    fileTree_->setRootIndex(fileModel_->index(path));
+}
+
+QString MainWindow::languageForPath(const QString &path) const {
+    const QString ext = QFileInfo(path).suffix().trimmed().toLower();
+    if (ext == "py") {
+        return "Python";
+    }
+    if (ext == "java") {
+        return "Java";
+    }
+    if (ext == "cpp" || ext == "cc" || ext == "cxx" ||
+        ext == "c++" || ext == "h" || ext == "hpp" ||
+        ext == "hh" || ext == "hxx") {
+        return "C++";
+    }
+    return defaultLanguage_;
+}
+
+void MainWindow::setCurrentLanguage(const QString &language) {
+    currentLanguage_ = normalizeLanguageName(language);
+    applyRuntimeSettings();
+}
+
 void MainWindow::setBaseWindowTitle(const QString &title) {
     baseWindowTitle_ = title;
     updateWindowTitle();
-}
-
-void MainWindow::startPlainTextSession(const QString &title) {
-    DirtyScope guard(this);
-    if (codeEditor_) {
-        codeEditor_->clear();
-    }
-    currentFilePath_.clear();
-    hasSavedFile_ = false;
-    editorMode_ = EditorMode::Solution;
-    currentSolutionCode_.clear();
-    currentBruteCode_.clear();
-    currentGeneratorCode_.clear();
-    currentTemplate_ = loadDefaultTemplate();
-    currentProblem_ = QJsonObject();
-    currentProblemRaw_.clear();
-    currentTestcasesRaw_.clear();
-    problemEdited_ = false;
-    testcasesEdited_ = false;
-    currentTimeout_ = 5;
-    clearAllTestCases();
-    addTestCase();
-    setDirty(false);
-    setBaseWindowTitle(title.isEmpty() ? QString("CF Dojo - Training") : title);
-    setPlainTextMode(true);
-    updateProblemMetaUi();
 }
 
 void MainWindow::closeEvent(QCloseEvent *event) {
@@ -325,17 +409,14 @@ void MainWindow::closeEvent(QCloseEvent *event) {
         autosaveTimer_->stop();
     }
     clearAutosaveFiles();
-    QFile::remove(autosaveSessionPath());
-    QMainWindow::closeEvent(event);
-}
 
-void MainWindow::showEvent(QShowEvent *event) {
-    QMainWindow::showEvent(event);
-    if (recoveryChecked_) {
-        return;
-    }
-    recoveryChecked_ = true;
-    QTimer::singleShot(0, this, &MainWindow::checkForRecovery);
+    // Persist window geometry so it reopens in the same place
+    QSettings settings("CF Dojo", "CF Dojo");
+    settings.setValue("windowGeometry", saveGeometry());
+    settings.setValue("windowState", saveState());
+    settings.setValue("uiScale", uiScale_);
+
+    QMainWindow::closeEvent(event);
 }
 
 MainWindow::DirtyScope::DirtyScope(MainWindow *window)
@@ -353,7 +434,7 @@ MainWindow::DirtyScope::~DirtyScope() {
 
 void MainWindow::setupUi() {
     resize(1200, 800);
-    baseWindowTitle_ = "CF Dojo - v1.0";
+    baseWindowTitle_ = QString("CF Dojo - %1").arg(CFDojo::versionString());
     updateWindowTitle();
 
     setupMenuBar();
@@ -566,28 +647,17 @@ void MainWindow::openSettingsDialog() {
         settingsWindow_ = new SettingsDialog(this);
         settingsWindow_->setTemplate(currentTemplate_);
         settingsWindow_->setMultithreadingEnabled(multithreadingEnabled_);
-        settingsWindow_->setTranscludeTemplateEnabled(transcludeTemplateEnabled_);
-        {
-            QSettings settings("CF Dojo", "CF Dojo");
-            settingsWindow_->setAutosaveIntervalSeconds(
-                settings.value("autosaveIntervalSec", 15).toInt());
-            settingsWindow_->setDefaultLanguage(
-                settings.value("defaultLanguage", "C++").toString());
-            settingsWindow_->setCompilerPath(
-                settings.value("cppCompilerPath", "g++").toString());
-            settingsWindow_->setCompilerFlags(
-                settings.value("cppCompilerFlags", "-O2 -std=c++17").toString());
-            settingsWindow_->setPythonPath(
-                settings.value("pythonPath", "python3").toString());
-            settingsWindow_->setPythonArgs(
-                settings.value("pythonArgs", "").toString());
-            settingsWindow_->setJavaCompilerPath(
-                settings.value("javaCompilerPath", "javac").toString());
-            settingsWindow_->setJavaRunPath(
-                settings.value("javaRunPath", "java").toString());
-            settingsWindow_->setJavaArgs(
-                settings.value("javaArgs", "").toString());
-        }
+        settingsWindow_->setTranscludeTemplateEnabled(defaultTranscludeTemplateEnabled_);
+        settingsWindow_->setAutosaveIntervalSeconds(autosaveIntervalMs_ / 1000);
+        settingsWindow_->setDefaultLanguage(defaultLanguage_);
+        settingsWindow_->setCompilerPath(cppCompilerPath_);
+        settingsWindow_->setCompilerFlags(cppCompilerFlags_);
+        settingsWindow_->setPythonPath(pythonPath_);
+        settingsWindow_->setPythonArgs(pythonArgs_);
+        settingsWindow_->setJavaCompilerPath(javaCompilerPath_);
+        settingsWindow_->setJavaRunPath(javaRunPath_);
+        settingsWindow_->setJavaArgs(javaArgs_);
+        settingsWindow_->setRootDir(fileExplorerRootDir_);
 
         connect(settingsWindow_, &SettingsDialog::settingsChanged, this, [this]() {
             currentTemplate_ = settingsWindow_->getTemplate();
@@ -613,23 +683,44 @@ void MainWindow::openSettingsDialog() {
             QSettings settings("CF Dojo", "CF Dojo");
             settings.setValue("defaultTemplate", currentTemplate_);
             multithreadingEnabled_ = settingsWindow_->isMultithreadingEnabled();
-            transcludeTemplateEnabled_ = settingsWindow_->isTranscludeTemplateEnabled();
-            settings.setValue("transcludeTemplate", transcludeTemplateEnabled_);
-            executionController_->setTranscludeTemplateEnabled(transcludeTemplateEnabled_);
+            defaultTranscludeTemplateEnabled_ =
+                settingsWindow_->isTranscludeTemplateEnabled();
+            settings.setValue("transcludeTemplate", defaultTranscludeTemplateEnabled_);
+            const QString previousDefaultLanguage = normalizeLanguageName(defaultLanguage_);
+            defaultLanguage_ = normalizeLanguageName(settingsWindow_->defaultLanguage());
+            if (normalizeLanguageName(currentLanguage_) == previousDefaultLanguage) {
+                currentLanguage_ = defaultLanguage_;
+            }
+            cppCompilerPath_ = settingsWindow_->compilerPath();
+            cppCompilerFlags_ = settingsWindow_->compilerFlags();
+            pythonPath_ = settingsWindow_->pythonPath();
+            pythonArgs_ = settingsWindow_->pythonArgs();
+            javaCompilerPath_ = settingsWindow_->javaCompilerPath();
+            javaRunPath_ = settingsWindow_->javaRunPath();
+            javaArgs_ = settingsWindow_->javaArgs();
+            fileExplorerRootDir_ = settingsWindow_->rootDir().trimmed();
+            if (fileExplorerRootDir_.isEmpty() ||
+                !QFileInfo::exists(fileExplorerRootDir_) ||
+                !QFileInfo(fileExplorerRootDir_).isDir()) {
+                fileExplorerRootDir_ = QDir::currentPath();
+            }
+            settings.setValue("rootDir", fileExplorerRootDir_);
+            applyRuntimeSettings();
             updateTemplateAvailability();
+            applyFileExplorerRootDirectory(fileExplorerRootDir_);
             settings.setValue("autosaveIntervalSec", settingsWindow_->autosaveIntervalSeconds());
             autosaveIntervalMs_ = settingsWindow_->autosaveIntervalSeconds() * 1000;
             if (isDirty_) {
                 scheduleAutosave();
             }
-            settings.setValue("defaultLanguage", settingsWindow_->defaultLanguage());
-            settings.setValue("cppCompilerPath", settingsWindow_->compilerPath());
-            settings.setValue("cppCompilerFlags", settingsWindow_->compilerFlags());
-            settings.setValue("pythonPath", settingsWindow_->pythonPath());
-            settings.setValue("pythonArgs", settingsWindow_->pythonArgs());
-            settings.setValue("javaCompilerPath", settingsWindow_->javaCompilerPath());
-            settings.setValue("javaRunPath", settingsWindow_->javaRunPath());
-            settings.setValue("javaArgs", settingsWindow_->javaArgs());
+            settings.setValue("defaultLanguage", defaultLanguage_);
+            settings.setValue("cppCompilerPath", cppCompilerPath_);
+            settings.setValue("cppCompilerFlags", cppCompilerFlags_);
+            settings.setValue("pythonPath", pythonPath_);
+            settings.setValue("pythonArgs", pythonArgs_);
+            settings.setValue("javaCompilerPath", javaCompilerPath_);
+            settings.setValue("javaRunPath", javaRunPath_);
+            settings.setValue("javaArgs", javaArgs_);
             if (settingsButton_) {
                 settingsButton_->setChecked(false);
                 settingsButton_->setActiveState(false);
@@ -645,26 +736,17 @@ void MainWindow::openSettingsDialog() {
     } else {
         settingsWindow_->setTemplate(currentTemplate_);
         settingsWindow_->setMultithreadingEnabled(multithreadingEnabled_);
-        settingsWindow_->setTranscludeTemplateEnabled(transcludeTemplateEnabled_);
-        QSettings settings("CF Dojo", "CF Dojo");
-        settingsWindow_->setAutosaveIntervalSeconds(
-            settings.value("autosaveIntervalSec", 15).toInt());
-        settingsWindow_->setDefaultLanguage(
-            settings.value("defaultLanguage", "C++").toString());
-        settingsWindow_->setCompilerPath(
-            settings.value("cppCompilerPath", "g++").toString());
-        settingsWindow_->setCompilerFlags(
-            settings.value("cppCompilerFlags", "-O2 -std=c++17").toString());
-        settingsWindow_->setPythonPath(
-            settings.value("pythonPath", "python3").toString());
-        settingsWindow_->setPythonArgs(
-            settings.value("pythonArgs", "").toString());
-        settingsWindow_->setJavaCompilerPath(
-            settings.value("javaCompilerPath", "javac").toString());
-        settingsWindow_->setJavaRunPath(
-            settings.value("javaRunPath", "java").toString());
-        settingsWindow_->setJavaArgs(
-            settings.value("javaArgs", "").toString());
+        settingsWindow_->setTranscludeTemplateEnabled(defaultTranscludeTemplateEnabled_);
+        settingsWindow_->setAutosaveIntervalSeconds(autosaveIntervalMs_ / 1000);
+        settingsWindow_->setDefaultLanguage(defaultLanguage_);
+        settingsWindow_->setCompilerPath(cppCompilerPath_);
+        settingsWindow_->setCompilerFlags(cppCompilerFlags_);
+        settingsWindow_->setPythonPath(pythonPath_);
+        settingsWindow_->setPythonArgs(pythonArgs_);
+        settingsWindow_->setJavaCompilerPath(javaCompilerPath_);
+        settingsWindow_->setJavaRunPath(javaRunPath_);
+        settingsWindow_->setJavaArgs(javaArgs_);
+        settingsWindow_->setRootDir(fileExplorerRootDir_);
     }
 
     if (settingsButton_) {
@@ -737,7 +819,9 @@ void MainWindow::setupMainEditor() {
 
     {
         FileExplorerBuilder explorerBuilder;
-        const QString rootPath = QDir::currentPath();
+        const QString rootPath = fileExplorerRootDir_.isEmpty()
+            ? QDir::currentPath()
+            : fileExplorerRootDir_;
         const auto explorerWidgets = explorerBuilder.build(sideStack_, rootPath);
         fileExplorer_ = explorerWidgets.panel;
         fileTree_ = explorerWidgets.tree;
@@ -826,9 +910,7 @@ void MainWindow::setupMainEditor() {
                 return;
             }
             loadCpackFromHandler(handler, filePath, true);
-            return;
         }
-        openPlainFileWithPrompt(filePath);
     });
 
     {
@@ -896,28 +978,6 @@ void MainWindow::setupMainEditor() {
     editorLayout->setContentsMargins(0, 0, 0, 0);
     editorLayout->setSpacing(0);
 
-    plainTextBanner_ = new QWidget(editorWrapper);
-    plainTextBanner_->setObjectName("PlainTextBanner");
-    auto *bannerLayout = new QHBoxLayout(plainTextBanner_);
-    bannerLayout->setContentsMargins(12, 8, 12, 8);
-    bannerLayout->setSpacing(8);
-    plainTextBannerLabel_ = new QLabel(
-        "This is a plain text file. Convert to .cpack to enable templates and tests.",
-        plainTextBanner_);
-    plainTextBannerLabel_->setWordWrap(true);
-    plainTextConvertButton_ = new QPushButton("Convert to CPack", plainTextBanner_);
-    bannerLayout->addWidget(plainTextBannerLabel_, 1);
-    bannerLayout->addWidget(plainTextConvertButton_);
-    plainTextBanner_->setVisible(false);
-
-    connect(plainTextConvertButton_, &QPushButton::clicked, this, [this]() {
-        saveFileAsWithTitle("Save as CPack");
-        if (hasSavedFile_) {
-            setPlainTextMode(false);
-        }
-    });
-
-    editorLayout->addWidget(plainTextBanner_);
     editorLayout->addWidget(editorWidgets.container, 1);
     mainSplitter_->addWidget(editorWrapper);
 
@@ -1066,9 +1126,6 @@ void MainWindow::setupMenuBar() {
     cornerLayout->addWidget(copySolutionButton);
 
     auto runAllFromMenu = [this]() {
-        if (plainTextMode_) {
-            return;
-        }
         if (transcludeTemplateEnabled_ && !currentTemplate_.contains("//#main")) {
             QMessageBox::warning(this, "Template Missing",
                                  "The template is missing the //#main marker.\n"
@@ -1098,22 +1155,17 @@ void MainWindow::setupMenuBar() {
     };
     connect(runAllButton, &QPushButton::clicked, this, runAllFromMenu);
     auto toggleTemplateView = [this]() {
-        if (plainTextMode_) {
-            return;
-        }
         transcludeTemplateEnabled_ = !transcludeTemplateEnabled_;
-        QSettings settings("CF Dojo", "CF Dojo");
-        settings.setValue("transcludeTemplate", transcludeTemplateEnabled_);
-        executionController_->setTranscludeTemplateEnabled(transcludeTemplateEnabled_);
+        applyRuntimeSettings();
         updateTemplateAvailability();
-        if (settingsWindow_) {
-            settingsWindow_->setTranscludeTemplateEnabled(transcludeTemplateEnabled_);
-        }
         if (transcludeTemplateEnabled_) {
             setEditorMode(EditorMode::Template);
         } else {
             setEditorMode(EditorMode::Solution);
         }
+        showBottomToast(transcludeTemplateEnabled_
+                            ? "Template unhidden."
+                            : "Template hidden.");
     };
 
     connect(templateButton, &QPushButton::clicked, this, toggleTemplateView);
@@ -1202,14 +1254,14 @@ void MainWindow::openHelpDialog() {
         "<p>CF Dojo is a local competitive programming IDE for solving and testing problems.</p>"
         "<h3>Quick start</h3>"
         "<ol>"
-        "<li>Open a .cpack or import from Competitive Companion.</li>"
+        "<li>Create a new problem or open a .cpack/import from Competitive Companion.</li>"
         "<li>Write your solution in solution.cpp.</li>"
         "<li>Add test cases and click Run All.</li>"
         "</ol>"
         "<h3>New / Open / Save</h3>"
         "<ul>"
-        "<li>New creates a blank problem and prompts for a .cpack file.</li>"
-        "<li>Open supports .cpack and plain text files.</li>"
+        "<li>New asks for a language (C++/Java/Python), then prompts for a .cpack path.</li>"
+        "<li>Open supports .cpack and plain text files, with language auto-detection for common extensions.</li>"
         "<li>Plain text mode has limited features; convert via the banner.</li>"
         "</ul>"
         "<h3>Testing & stress</h3>"
@@ -1218,7 +1270,8 @@ void MainWindow::openHelpDialog() {
         "<li>Stress testing uses generator.cpp + brute.cpp.</li>"
         "</ul>"
         "<h3>Templates</h3>"
-        "<p>template.cpp uses //#main to insert your solution.</p>"
+        "<p>template.cpp uses //#main to insert your solution. "
+        "Template view default in Settings applies to new/opened files, not the current one.</p>"
         "<h3>Autosave & recovery</h3>"
         "<p>Unsaved changes are autosaved and can be restored after a crash.</p>"
         "<h3>Documentation</h3>"
@@ -1290,7 +1343,7 @@ void MainWindow::openAboutDialog() {
     aboutText->setOpenExternalLinks(true);
     aboutText->setWordWrap(true);
     aboutText->setText(
-        "<h2>CF Dojo</h2>"
+        QString("<h2>CF Dojo %1</h2>").arg(CFDojo::versionString()) +
         "<p>Local competitive programming IDE for fast iteration and testing.</p>"
         "<h3>Quick start</h3>"
         "<ol>"
@@ -1339,7 +1392,7 @@ void MainWindow::openAboutDialog() {
     dialog.exec();
 }
 
-void MainWindow::showCopyToast() {
+void MainWindow::showBottomToast(const QString &message) {
     if (!copyToast_) {
         copyToast_ = new QWidget(this);
         copyToast_->setObjectName("CopyToast");
@@ -1358,7 +1411,7 @@ void MainWindow::showCopyToast() {
         connect(copyToastTimer_, &QTimer::timeout, copyToast_, &QWidget::hide);
     }
 
-    copyToastLabel_->setText("Answer copied to clipboard.");
+    copyToastLabel_->setText(message);
     copyToast_->adjustSize();
 
     const int margin = 16;
@@ -1370,6 +1423,10 @@ void MainWindow::showCopyToast() {
     copyToast_->show();
     copyToast_->raise();
     copyToastTimer_->start(1600);
+}
+
+void MainWindow::showCopyToast() {
+    showBottomToast("Answer copied to clipboard.");
 }
 
 void MainWindow::syncEditorToMode() {
@@ -1557,22 +1614,11 @@ QString MainWindow::autosaveMetaPath() const {
     return QDir(autosaveDir()).filePath("autosave.json");
 }
 
-QString MainWindow::autosaveSessionPath() const {
-    return QDir(autosaveDir()).filePath("session.lock");
-}
-
 void MainWindow::setupAutosave() {
     if (!autosaveTimer_) {
         autosaveTimer_ = new QTimer(this);
         autosaveTimer_->setSingleShot(true);
         connect(autosaveTimer_, &QTimer::timeout, this, &MainWindow::performAutosave);
-    }
-
-    QFile sessionFile(autosaveSessionPath());
-    if (sessionFile.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
-        const QString stamp = QDateTime::currentDateTimeUtc().toString(Qt::ISODate);
-        sessionFile.write(stamp.toUtf8());
-        sessionFile.close();
     }
 }
 
@@ -1590,7 +1636,7 @@ void MainWindow::performAutosave() {
 
     syncEditorToMode();
     CpackFileHandler handler;
-    handler.addFile("soluiton.cpp", currentSolutionCode_.toUtf8());
+    handler.addFile("solution.cpp", currentSolutionCode_.toUtf8());
     handler.addFile("brute.cpp", currentBruteCode_.toUtf8());
     handler.addFile("generator.cpp", currentGeneratorCode_.toUtf8());
     handler.addFile("template.cpp", currentTemplate_.toUtf8());
@@ -1648,104 +1694,14 @@ void MainWindow::clearAutosaveFiles() {
     QFile::remove(autosaveMetaPath());
 }
 
-void MainWindow::checkForRecovery() {
-    const QString cpackPath = autosaveCpackPath();
-    const QString metaPath = autosaveMetaPath();
-    if (!QFile::exists(cpackPath) || !QFile::exists(metaPath)) {
-        return;
-    }
-
-    QFile metaFile(metaPath);
-    if (!metaFile.open(QIODevice::ReadOnly)) {
-        return;
-    }
-    const QJsonDocument metaDoc = QJsonDocument::fromJson(metaFile.readAll());
-    metaFile.close();
-    if (!metaDoc.isObject()) {
-        return;
-    }
-
-    const QJsonObject meta = metaDoc.object();
-    const bool wasDirty = meta.value("dirty").toBool(false);
-    const bool crashed = QFile::exists(autosaveSessionPath());
-    if (!wasDirty && !crashed) {
-        return;
-    }
-
-    QString timeLabel = meta.value("timestamp").toString();
-    if (!timeLabel.isEmpty()) {
-        const QDateTime stamp = QDateTime::fromString(timeLabel, Qt::ISODate).toLocalTime();
-        if (stamp.isValid()) {
-            timeLabel = stamp.toString("yyyy-MM-dd HH:mm");
-        }
-    }
-
-    QMessageBox box(this);
-    box.setWindowTitle("Recover Unsaved Work");
-    box.setIcon(QMessageBox::Question);
-    box.setWindowModality(Qt::WindowModal);
-    box.setText("A recovery file was found from a previous session.");
-    if (!timeLabel.isEmpty()) {
-        box.setInformativeText(QString("Last autosave: %1").arg(timeLabel));
-    }
-    auto *restoreBtn = box.addButton("Restore", QMessageBox::AcceptRole);
-    auto *discardBtn = box.addButton("Discard", QMessageBox::DestructiveRole);
-    box.setDefaultButton(restoreBtn);
-    QTimer::singleShot(0, &box, [this, &box]() {
-        box.adjustSize();
-        const QSize size = box.size();
-        const QRect parentRect = frameGeometry();
-        QPoint pos(parentRect.center().x() - size.width() / 2,
-                   parentRect.center().y() - size.height() / 2);
-        QScreen *screen = nullptr;
-        if (windowHandle()) {
-            screen = windowHandle()->screen();
-        }
-        if (!screen) {
-            screen = QGuiApplication::screenAt(parentRect.center());
-        }
-        if (!screen) {
-            screen = this->screen();
-        }
-        if (!screen) {
-            screen = QGuiApplication::primaryScreen();
-        }
-        if (screen) {
-            const QRect bounds = screen->availableGeometry();
-            pos.setX(std::clamp(pos.x(), bounds.left(), bounds.right() - size.width()));
-            pos.setY(std::clamp(pos.y(), bounds.top(), bounds.bottom() - size.height()));
-        }
-        box.move(pos);
-        box.raise();
-        box.activateWindow();
-    });
-    box.exec();
-
-    if (box.clickedButton() == restoreBtn) {
-        CpackFileHandler handler;
-        if (!handler.load(cpackPath)) {
-            QMessageBox::critical(this, "Error",
-                "Failed to restore recovery file: " + handler.errorString());
-            return;
-        }
-        const QString savedPath = meta.value("filePath").toString();
-        const bool savedFlag = meta.value("hasSavedFile").toBool(!savedPath.isEmpty());
-        loadCpackFromHandler(handler, savedPath, savedFlag);
-
-        const int modeValue = meta.value("editorMode").toInt(
-            static_cast<int>(EditorMode::Solution));
-        setEditorMode(static_cast<EditorMode>(modeValue));
-        setDirty(true);
-        scheduleAutosave();
-    } else if (box.clickedButton() == discardBtn) {
-        clearAutosaveFiles();
-    }
-}
 
 void MainWindow::loadCpackFromHandler(const CpackFileHandler &handler,
                                       const QString &path,
                                       bool markSavedFile) {
     DirtyScope guard(this);
+    setCurrentLanguage(defaultLanguage_);
+    transcludeTemplateEnabled_ = defaultTranscludeTemplateEnabled_;
+    applyRuntimeSettings();
     if (handler.hasFile("manifest.json")) {
         QJsonParseError manifestError;
         const QJsonDocument manifestDoc = QJsonDocument::fromJson(
@@ -1759,19 +1715,14 @@ void MainWindow::loadCpackFromHandler(const CpackFileHandler &handler,
         }
     }
 
-    const bool hasSolutionFile =
-        handler.hasFile("soluiton.cpp") || handler.hasFile("solution.cpp");
-    if (!hasSolutionFile) {
+    // Require canonical solution filename
+    if (!handler.hasFile("solution.cpp")) {
         QMessageBox::critical(this, "Error", "Unsupported CPack format");
         return;
     }
 
     currentSolutionCode_.clear();
-    if (handler.hasFile("soluiton.cpp")) {
-        currentSolutionCode_ = QString::fromUtf8(handler.getFile("soluiton.cpp"));
-    } else if (handler.hasFile("solution.cpp")) {
-        currentSolutionCode_ = QString::fromUtf8(handler.getFile("solution.cpp"));
-    }
+    currentSolutionCode_ = QString::fromUtf8(handler.getFile("solution.cpp"));
     if (codeEditor_) {
         codeEditor_->setText(currentSolutionCode_);
     }
@@ -1812,7 +1763,7 @@ void MainWindow::loadCpackFromHandler(const CpackFileHandler &handler,
     if (!loadedTitle.isEmpty()) {
         baseWindowTitle_ = QString("CF Dojo - %1").arg(loadedTitle);
     } else {
-        baseWindowTitle_ = "CF Dojo - v1.0";
+        baseWindowTitle_ = QString("CF Dojo - %1").arg(CFDojo::versionString());
     }
     updateProblemMetaUi();
 
@@ -1866,7 +1817,6 @@ void MainWindow::loadCpackFromHandler(const CpackFileHandler &handler,
     currentFilePath_ = path;
     hasSavedFile_ = markSavedFile;
     setDirty(false);
-    setPlainTextMode(false);
     updateTemplateAvailability();
     updateEditorModeButtons();
     updateWindowTitle();
@@ -1986,6 +1936,12 @@ void MainWindow::onSidePanelCollapsedChanged(bool collapsed) {
         sidebarToggle_->setChecked(!collapsed);
     }
     updateActivityBarActiveStates(collapsed);
+
+    // Re-hide template markers after the layout settles — QScintilla can
+    // reveal hidden lines when its viewport is resized by the splitter.
+    if (transcludeTemplateEnabled_ && editorMode_ == EditorMode::Template) {
+        QTimer::singleShot(0, this, &MainWindow::updateTemplateMarkerVisibility);
+    }
 }
 
 void MainWindow::updateActivityBarActiveStates(bool collapsed) {
@@ -2201,6 +2157,7 @@ void MainWindow::addTestCase() {
             }
 
             // Set template for transclusion before running
+            applyRuntimeSettings();
             executionController_->setTemplate(currentTemplate_);
             executionController_->setTimeoutMs(currentTimeout_ * 1000);
             executionController_->runWithBindings(makeBindings(caseWidgets));
@@ -2275,6 +2232,7 @@ void MainWindow::runNextSequentialTest() {
             testCase.expectedOutput = widgets.expectedEditor->toPlainText();
         }
 
+        applyRuntimeSettings();
         executionController_->setTemplate(currentTemplate_);
         executionController_->setTimeoutMs(currentTimeout_ * 1000);
         executionController_->runWithBindings(makeBindings(widgets));
@@ -2462,10 +2420,13 @@ void MainWindow::runStressTest() {
     const QString bruteCopy = brute;
     const QString generatorCopy = generator;
     const QString tmplCopy = tmpl;
+    const QString compilerPathCopy = cppCompilerPath_;
+    const QString compilerFlagsCopy = cppCompilerFlags_;
 
     const bool useParallel = multithreadingEnabled_;
-    stressWatcher_->setFuture(QtConcurrent::run([this, count, solutionCopy, bruteCopy, generatorCopy, tmplCopy, timeoutMs, useParallel]() {
-        return runStressTestWorker(count, solutionCopy, bruteCopy, generatorCopy, tmplCopy, timeoutMs, useParallel);
+    stressWatcher_->setFuture(QtConcurrent::run([this, count, solutionCopy, bruteCopy, generatorCopy, tmplCopy, compilerPathCopy, compilerFlagsCopy, timeoutMs, useParallel]() {
+        return runStressTestWorker(count, solutionCopy, bruteCopy, generatorCopy, tmplCopy,
+                                   compilerPathCopy, compilerFlagsCopy, timeoutMs, useParallel);
     }));
 }
 
@@ -2474,6 +2435,8 @@ MainWindow::StressResult MainWindow::runStressTestWorker(int count,
                                                         const QString &brute,
                                                         const QString &generator,
                                                         const QString &tmpl,
+                                                        const QString &compilerPath,
+                                                        const QString &compilerFlags,
                                                         int timeoutMs,
                                                         bool parallel) const {
     StressResult result;
@@ -2490,6 +2453,12 @@ MainWindow::StressResult MainWindow::runStressTestWorker(int count,
         result.complexity = QString("Suspected: insufficient timing data");
         return result;
     }
+
+#ifdef Q_OS_WIN
+    const QString exeSuffix = ".exe";
+#else
+    const QString exeSuffix;
+#endif
 
     auto applyTransclusion = [](const QString &templateText, const QString &solutionText) {
         if (templateText.contains("//#main")) {
@@ -2517,12 +2486,15 @@ MainWindow::StressResult MainWindow::runStressTestWorker(int count,
         out << code;
         file.close();
 
-        QStringList args;
-        args << "-O2" << "-std=c++17" << sourceName << "-o" << exeName;
+        QStringList args = QProcess::splitCommand(compilerFlags.trimmed());
+        if (args.isEmpty()) {
+            args << "-O2" << "-std=c++17";
+        }
+        args << sourceName << "-o" << exeName;
 
         QProcess compiler;
         compiler.setWorkingDirectory(tempPath);
-        compiler.start("g++", args);
+        compiler.start(compilerPath.trimmed().isEmpty() ? "g++" : compilerPath.trimmed(), args);
         if (!compiler.waitForFinished(30000)) {
             if (errorOut) {
                 *errorOut = QString("Compilation timed out for %1").arg(sourceName);
@@ -2545,17 +2517,17 @@ MainWindow::StressResult MainWindow::runStressTestWorker(int count,
     const QString bruteCode = applyTransclusion(tmpl, brute);
     const QString solutionCode = applyTransclusion(tmpl, solution);
     QString compileError;
-    if (!compileSource(generatorCode, "generator.cpp", "generator", &compileError)) {
+    if (!compileSource(generatorCode, "generator.cpp", "generator" + exeSuffix, &compileError)) {
         result.error = QString("Generator compile error:\n%1").arg(compileError);
         result.complexity = QString("Suspected: insufficient timing data");
         return result;
     }
-    if (!compileSource(bruteCode, "brute.cpp", "brute", &compileError)) {
+    if (!compileSource(bruteCode, "brute.cpp", "brute" + exeSuffix, &compileError)) {
         result.error = QString("Brute compile error:\n%1").arg(compileError);
         result.complexity = QString("Suspected: insufficient timing data");
         return result;
     }
-    if (!compileSource(solutionCode, "solution.cpp", "solution", &compileError)) {
+    if (!compileSource(solutionCode, "solution.cpp", "solution" + exeSuffix, &compileError)) {
         result.error = QString("Solution compile error:\n%1").arg(compileError);
         result.complexity = QString("Suspected: insufficient timing data");
         return result;
@@ -2614,9 +2586,9 @@ MainWindow::StressResult MainWindow::runStressTestWorker(int count,
     };
 
     const QString tempPath = tempDir.path();
-    const QString generatorExe = QDir(tempPath).filePath("generator");
-    const QString bruteExe = QDir(tempPath).filePath("brute");
-    const QString solutionExe = QDir(tempPath).filePath("solution");
+    const QString generatorExe = QDir(tempPath).filePath("generator" + exeSuffix);
+    const QString bruteExe = QDir(tempPath).filePath("brute" + exeSuffix);
+    const QString solutionExe = QDir(tempPath).filePath("solution" + exeSuffix);
 
     std::vector<QString> inputs;
     std::vector<QString> caseDirs;
@@ -2823,6 +2795,7 @@ void MainWindow::runAllTests() {
     if (caseWidgets_.empty() || !codeEditor_) {
         return;
     }
+    applyRuntimeSettings();
 
     runAllInputSizes_.clear();
     runAllInputSizes_.reserve(caseWidgets_.size());
@@ -3020,16 +2993,97 @@ void MainWindow::applyUiZoom() {
     }
 
     testPanelBuilder_.refreshEditorSizing();
+
+    // Scale activity bar and icon buttons
+    auto scalePx = [this](int base) -> int {
+        return std::max(1, static_cast<int>(std::round(base * uiScale_)));
+    };
+
+    if (activityBar_) {
+        activityBar_->setFixedWidth(scalePx(kActivityBarWidth));
+    }
+
+    auto scaleActivityButton = [&](ActivityBarButton *btn) {
+        if (!btn) return;
+        btn->setFixedHeight(scalePx(kActivityBarWidth));
+        btn->setScale(uiScale_);
+    };
+    scaleActivityButton(sidebarToggle_);
+    scaleActivityButton(stressTestButton_);
+    scaleActivityButton(templateButton_);
+    scaleActivityButton(newFileButton_);
+    scaleActivityButton(settingsButton_);
+    scaleActivityButton(backButton_);
+
+    // Scale corner menu icon buttons
+    const int iconPx = scalePx(16);
+    const QSize iconSz(iconPx, iconPx);
+    const QSize btnSz(scalePx(28), scalePx(24));
+    auto scaleMenuButton = [&](QPushButton *btn) {
+        if (!btn) return;
+        btn->setIconSize(iconSz);
+        btn->setFixedSize(btnSz);
+    };
+    scaleMenuButton(menuRunAllButton_);
+    scaleMenuButton(menuTemplateButton_);
+    // The copy button is found by object name
+    if (auto *copyBtn = menuBar_ ? menuBar_->findChild<QPushButton *>("MenuCopyButton") : nullptr) {
+        scaleMenuButton(copyBtn);
+    }
+
+    // Scale side panel minimum width
+    if (sidePanel_) {
+        sidePanel_->setMinimumWidth(scalePx(kSidePanelMinWidth));
+    }
+    if (mainSplitter_) {
+        mainSplitter_->setMinimumPanelWidth(scalePx(kSidePanelMinWidth));
+        mainSplitter_->setPreferredWidth(scalePx(kSidePanelDefaultWidth));
+    }
+
+    // Scale all small icon buttons created by test/stress panel builders.
+    // These are found by their Qt object names since they're not stored as
+    // MainWindow members.
+    const int smallBtnPx = scalePx(28);
+    const QSize smallBtnSz(smallBtnPx, smallBtnPx);
+    const auto allButtons = findChildren<QPushButton *>();
+    for (auto *btn : allButtons) {
+        const QString name = btn->objectName();
+        if (name == "RunButton" || name == "DeleteButton") {
+            btn->setIconSize(iconSz);
+            btn->setFixedSize(smallBtnSz);
+        } else if (name == "RunAllButton" || name == "ClearCasesButton"
+                   || name == "AddCaseButton") {
+            btn->setIconSize(iconSz);
+            btn->setMinimumHeight(smallBtnPx);
+        }
+    }
+
+    // Scale the bottom action row height
+    const auto actionRows = findChildren<QWidget *>("CasesActionRow");
+    for (auto *row : actionRows)
+        row->setFixedHeight(smallBtnPx);
+
+    // Scale stress test count field
+    const auto countEdits = findChildren<QLineEdit *>("StressGenerateCount");
+    for (auto *edit : countEdits)
+        edit->setFixedWidth(scalePx(48));
+
+    // Re-hide template markers — font/zoom changes can reset hidden lines.
+    updateTemplateMarkerVisibility();
 }
 
 void MainWindow::zoomIn() {
-    uiScale_ += 0.1;
-    applyUiZoom();
+    if (uiScale_ < 1.8) {
+        uiScale_ = std::min(uiScale_ + 0.1, 1.8);
+        applyUiZoom();
+    }
 }
 
 void MainWindow::zoomOut() {
-    uiScale_ -= 0.1;
-    applyUiZoom();
+    if (uiScale_ > 0.7) {
+        uiScale_ = std::max(uiScale_ - 0.1, 0.7);
+        applyUiZoom();
+    }
 }
 
 void MainWindow::resetZoom() {
@@ -3041,10 +3095,71 @@ void MainWindow::newFile() {
     if (!confirmDiscardUnsaved("creating a new file")) {
         return;
     }
+
+    QString selectedLanguage = defaultLanguage_;
+    {
+        QDialog picker(this);
+        picker.setWindowTitle("New File Language");
+        picker.setModal(true);
+
+        auto *layout = new QVBoxLayout(&picker);
+        layout->setContentsMargins(16, 16, 16, 16);
+        layout->setSpacing(12);
+
+        auto *prompt = new QLabel("Choose language for the new file.", &picker);
+        layout->addWidget(prompt);
+
+        auto *buttonRow = new QHBoxLayout();
+        buttonRow->setSpacing(8);
+
+        auto *cppBtn = new QPushButton("C++", &picker);
+        auto *javaBtn = new QPushButton("Java", &picker);
+        auto *pythonBtn = new QPushButton("Python", &picker);
+        auto *cancelBtn = new QPushButton("Cancel", &picker);
+
+        buttonRow->addWidget(cppBtn);
+        buttonRow->addWidget(javaBtn);
+        buttonRow->addWidget(pythonBtn);
+        buttonRow->addWidget(cancelBtn);
+        layout->addLayout(buttonRow);
+
+        connect(cppBtn, &QPushButton::clicked, &picker, [&picker, &selectedLanguage]() {
+            selectedLanguage = "C++";
+            picker.accept();
+        });
+        connect(javaBtn, &QPushButton::clicked, &picker, [&picker, &selectedLanguage]() {
+            selectedLanguage = "Java";
+            picker.accept();
+        });
+        connect(pythonBtn, &QPushButton::clicked, &picker, [&picker, &selectedLanguage]() {
+            selectedLanguage = "Python";
+            picker.accept();
+        });
+        connect(cancelBtn, &QPushButton::clicked, &picker, &QDialog::reject);
+
+        if (normalizeLanguageName(defaultLanguage_) == "Python") {
+            pythonBtn->setDefault(true);
+            pythonBtn->setFocus();
+        } else if (normalizeLanguageName(defaultLanguage_) == "Java") {
+            javaBtn->setDefault(true);
+            javaBtn->setFocus();
+        } else {
+            cppBtn->setDefault(true);
+            cppBtn->setFocus();
+        }
+
+        if (picker.exec() != QDialog::Accepted) {
+            return;
+        }
+    }
+
     DirtyScope guard(this);
     if (codeEditor_) {
         codeEditor_->clear();
     }
+    setCurrentLanguage(selectedLanguage);
+    transcludeTemplateEnabled_ = defaultTranscludeTemplateEnabled_;
+    applyRuntimeSettings();
     currentFilePath_.clear();
     hasSavedFile_ = false;
     editorMode_ = EditorMode::Solution;
@@ -3067,7 +3182,6 @@ void MainWindow::newFile() {
     updateEditorModeButtons();
     setDirty(false);
     saveFileAsWithTitle("Create CPack");
-    setPlainTextMode(false);
 }
 
 void MainWindow::openFile() {
@@ -3076,26 +3190,22 @@ void MainWindow::openFile() {
     }
     const QString path = QFileDialog::getOpenFileName(
         this,
-        "Open CPack or Text File",
+        "Open CPack File",
         QString(),
-        "All Supported Files (*.cpack *.cpp *.py *.java *.txt *.md *.json *.in *.out);;CPack Files (*.cpack);;All Files (*)"
+        "CPack Files (*.cpack);;All Files (*)"
     );
     
     if (path.isEmpty()) {
         return;
     }
     
-    if (path.endsWith(".cpack", Qt::CaseInsensitive)) {
-        CpackFileHandler handler;
-        if (!handler.load(path)) {
-            QMessageBox::critical(this, "Error", 
-                "Failed to open file: " + handler.errorString());
-            return;
-        }
-        loadCpackFromHandler(handler, path, true);
-    } else {
-        openPlainFileWithPrompt(path);
+    CpackFileHandler handler;
+    if (!handler.load(path)) {
+        QMessageBox::critical(this, "Error", 
+            "Failed to open file: " + handler.errorString());
+        return;
     }
+    loadCpackFromHandler(handler, path, true);
 }
 
 void MainWindow::saveFile() {
@@ -3108,7 +3218,7 @@ void MainWindow::saveFile() {
     
     syncEditorToMode();
 
-    handler.addFile("soluiton.cpp", currentSolutionCode_.toUtf8());
+    handler.addFile("solution.cpp", currentSolutionCode_.toUtf8());
     handler.addFile("brute.cpp", currentBruteCode_.toUtf8());
     handler.addFile("generator.cpp", currentGeneratorCode_.toUtf8());
     handler.addFile("template.cpp", currentTemplate_.toUtf8());
@@ -3149,9 +3259,6 @@ void MainWindow::saveFile() {
     } else {
         hasSavedFile_ = true;
         setDirty(false);
-        if (currentFilePath_.endsWith(".cpack", Qt::CaseInsensitive)) {
-            setPlainTextMode(false);
-        }
     }
 }
 
@@ -3178,182 +3285,21 @@ void MainWindow::saveFileAsWithTitle(const QString &title) {
     saveFile();
 }
 
-void MainWindow::openPlainFileWithPrompt(const QString &path) {
-    QFile file(path);
-    if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
-        QMessageBox::critical(this, "Error",
-            "Failed to open file: " + file.errorString());
-        return;
-    }
-
-    QFileInfo info(path);
-    baseWindowTitle_ = info.fileName().isEmpty()
-        ? QString("CF Dojo - v1.0")
-        : QString("CF Dojo - %1").arg(info.fileName());
-
-    const QString contents = QString::fromUtf8(file.readAll());
-    currentSolutionCode_ = contents;
-    if (codeEditor_) {
-        DirtyScope guard(this);
-        codeEditor_->setText(contents);
-    }
-
-    editorMode_ = EditorMode::Solution;
-    updateEditorModeButtons();
-    updateWindowTitle();
-    currentFilePath_.clear();
-    currentTemplate_ = loadDefaultTemplate();
-    currentProblem_ = QJsonObject();
-    currentProblemRaw_.clear();
-    currentTestcasesRaw_.clear();
-    problemEdited_ = false;
-    testcasesEdited_ = false;
-    currentTimeout_ = 5;
-    updateProblemMetaUi();
-    hasSavedFile_ = false;
-    setDirty(false);
-    populateCpackTree();
-    updateTemplateAvailability();
-    updateEditorModeButtons();
-
-    QMessageBox box(this);
-    box.setWindowTitle("Convert to CPack?");
-    box.setIcon(QMessageBox::Question);
-    box.setText("This is a plain text file.");
-    box.setInformativeText(
-        "Convert to .cpack to enable templates, tests, and problem data.\n"
-        "You can also convert later from the banner.");
-    auto *saveBtn = box.addButton("Convert to CPack", QMessageBox::AcceptRole);
-    box.addButton("Keep as Text", QMessageBox::RejectRole);
-    box.setDefaultButton(saveBtn);
-    box.exec();
-
-    if (box.clickedButton() == saveBtn) {
-        saveFileAsWithTitle("Save as CPack");
-        if (!hasSavedFile_) {
-            setPlainTextMode(true);
-            return;
-        }
-        setPlainTextMode(false);
-        return;
-    }
-    setPlainTextMode(true);
-}
-
-void MainWindow::setPlainTextMode(bool enabled) {
-    plainTextMode_ = enabled;
-    const QColor normal = themeManager_.textColor();
-    const QColor inactive = QColor("#808080");
-    const QColor edge = themeManager_.edgeColor();
-
-    auto applyDefaultTint = [normal, inactive](ActivityBarButton *button) {
-        if (!button) {
-            return;
-        }
-        button->setTintColors(normal, normal, inactive);
-    };
-
-    auto applyDisabledTint = [edge](ActivityBarButton *button) {
-        if (!button) {
-            return;
-        }
-        button->setTintColors(edge, edge, edge);
-    };
-
-    auto setMenuButtonState = [this, normal, edge](QPushButton *button,
-                                                   const QString &iconPath,
-                                                   bool isEnabled) {
-        if (!button) {
-            return;
-        }
-        const QColor tint = isEnabled ? normal : edge;
-        button->setEnabled(isEnabled);
-        button->setIcon(IconUtils::makeTintedIcon(iconPath, tint, QSize(16, 16)));
-    };
-
-    if (enabled) {
-        if (plainTextBanner_) {
-            plainTextBanner_->setVisible(true);
-        }
-        if (mainSplitter_) {
-            wasSidePanelCollapsed_ = mainSplitter_->isCollapsed();
-            if (!wasSidePanelCollapsed_) {
-                mainSplitter_->collapse();
-            }
-        }
-        if (sidebarToggle_) {
-            sidebarToggle_->setActiveState(false);
-            sidebarToggle_->setChecked(false);
-            sidebarToggle_->setEnabled(false);
-            applyDisabledTint(sidebarToggle_);
-        }
-        if (stressTestButton_) {
-            stressTestButton_->setActiveState(false);
-            stressTestButton_->setChecked(false);
-            stressTestButton_->setEnabled(false);
-            applyDisabledTint(stressTestButton_);
-        }
-        if (templateButton_) {
-            templateButton_->setActiveState(false);
-            templateButton_->setChecked(false);
-            templateButton_->setEnabled(false);
-            applyDisabledTint(templateButton_);
-        }
-        setMenuButtonState(menuRunAllButton_, ":/images/play.svg", false);
-        setMenuButtonState(menuTemplateButton_, ":/images/template.svg", false);
-        return;
-    }
-
-    if (plainTextBanner_) {
-        plainTextBanner_->setVisible(false);
-    }
-    if (sidebarToggle_) {
-        sidebarToggle_->setEnabled(true);
-        applyDefaultTint(sidebarToggle_);
-    }
-    if (stressTestButton_) {
-        stressTestButton_->setEnabled(true);
-        applyDefaultTint(stressTestButton_);
-    }
-    if (templateButton_) {
-        templateButton_->setEnabled(true);
-        applyDefaultTint(templateButton_);
-    }
-    setMenuButtonState(menuRunAllButton_, ":/images/play.svg", true);
-    setMenuButtonState(menuTemplateButton_, ":/images/template.svg", true);
-    if (mainSplitter_ && !wasSidePanelCollapsed_ && mainSplitter_->isCollapsed()) {
-        mainSplitter_->expand();
-    }
-    updateActivityBarActiveStates(mainSplitter_ && mainSplitter_->isCollapsed());
-}
-
 void MainWindow::setupCompanionListener() {
     companionListener_ = new CompanionListener(this);
     
     connect(companionListener_, &CompanionListener::problemReceived,
             this, &MainWindow::onProblemReceived);
     
-    connect(companionListener_, &CompanionListener::errorOccurred,
-            this, [](const QString &error) {
-        qWarning() << "Companion listener error:" << error;
-    });
-    
-    if (!companionListener_->start()) {
-        qWarning() << "Failed to start Competitive Companion listener on any port";
-    } else {
-        qDebug() << "Competitive Companion listener started on port" << companionListener_->port();
-    }
+    companionListener_->start();
 }
 
 void MainWindow::onProblemReceived(const QJsonObject &problem) {
     if (!confirmDiscardUnsaved("importing a new problem")) {
         return;
     }
-    qDebug() << "Problem received:" << problem["name"].toString();
-    
     // Ensure UI is ready
     if (!testPanelWidgets_.casesLayout || !testPanelWidgets_.casesContainer) {
-        qWarning() << "Test panel not initialized yet";
         return;
     }
     
@@ -3366,9 +3312,7 @@ void MainWindow::onProblemReceived(const QJsonObject &problem) {
         filename = "problem";
     }
     
-    QString cpackPath = QDir::current().filePath(filename + ".cpack");
-    qDebug() << "Looking for cpack at:" << cpackPath;
-    qDebug() << "File exists:" << QFile::exists(cpackPath);
+    QString cpackPath = QDir(fileExplorerRootDir_).filePath(filename + ".cpack");
     
     // Check if .cpack file already exists
     if (QFile::exists(cpackPath)) {

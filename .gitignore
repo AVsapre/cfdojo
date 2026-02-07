@@ -41,3 +41,6 @@ cmake-build*/
 
 # Qt/Qt Creator + other tooling artifacts
 .cpack/
+
+# Vendored dependency downloads (fetched at configure time)
+vendor/

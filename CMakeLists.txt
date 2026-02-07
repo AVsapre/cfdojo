@@ -7,25 +7,28 @@ set(CMAKE_AUTORCC ON)
 set(CMAKE_AUTOUIC ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
+option(CFDOJO_VENDOR "Vendor third-party dependencies instead of using system packages" ON)
+
 find_package(Qt6 REQUIRED COMPONENTS Widgets Network Concurrent)
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_LIST_DIR}/cmake")
-find_package(QScintilla REQUIRED)
+
+if(CFDOJO_VENDOR)
+    include(cmake/VendorDeps.cmake)
+else()
+    find_package(QScintilla REQUIRED)
+endif()
+
+include(CTest)
 
 add_executable(CFDojo
     src/app/ActivityBarButton.cpp
     src/app/ActivityBarButton.h
     src/app/CollapsibleSplitter.cpp
     src/app/CollapsibleSplitter.h
-    src/app/HomeWindow.cpp
-    src/app/HomeWindow.h
-    src/app/LandingButton.cpp
-    src/app/LandingButton.h
     src/app/MainWindow.cpp
     src/app/MainWindow.h
     src/app/SettingsDialog.cpp
     src/app/SettingsDialog.h
-    src/app/TrainerWindow.cpp
-    src/app/TrainerWindow.h
     src/editor/EditorConfigurator.cpp
     src/editor/EditorConfigurator.h
     src/editor/EditorPlaceholder.cpp
@@ -57,3 +60,14 @@ add_executable(CFDojo
 target_include_directories(CFDojo PRIVATE ${CMAKE_CURRENT_LIST_DIR}/src)
 
 target_link_libraries(CFDojo PRIVATE Qt6::Widgets Qt6::Network Qt6::Concurrent QScintilla::QScintilla)
+
+if(BUILD_TESTING)
+    add_executable(CFDojoCpackTests
+        test/test_cpack_handler.cpp
+        src/file/CpackFileHandler.cpp
+        src/file/CpackFileHandler.h
+    )
+    target_include_directories(CFDojoCpackTests PRIVATE ${CMAKE_CURRENT_LIST_DIR}/src)
+    target_link_libraries(CFDojoCpackTests PRIVATE Qt6::Core)
+    add_test(NAME cpack_handler COMMAND CFDojoCpackTests)
+endif()

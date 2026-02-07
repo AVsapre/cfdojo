@@ -1,5 +1,6 @@
 #pragma once
 
+#include <QApplication>
 #include <QColor>
 #include <QIcon>
 #include <QPainter>
@@ -9,7 +10,10 @@
 namespace IconUtils {
 
 inline QIcon makeTintedIcon(const QString &path, const QColor &color, const QSize &size,
-                            qreal dpr = 1.0) {
+                            qreal dpr = 0.0) {
+    if (dpr <= 0.0) {
+        dpr = qApp ? qApp->devicePixelRatio() : 1.0;
+    }
     const QSize pixmapSize(static_cast<int>(size.width() * dpr),
                            static_cast<int>(size.height() * dpr));
     QPixmap base = QIcon(path).pixmap(pixmapSize);

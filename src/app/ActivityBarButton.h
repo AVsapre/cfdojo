@@ -12,6 +12,7 @@ public:
 
     void setActiveState(bool active);
     void setTintColors(const QColor &normal, const QColor &hovered, const QColor &inactive);
+    void setScale(double scale);
 
 protected:
     void enterEvent(QEnterEvent *event) override;
@@ -30,4 +31,5 @@ private:
     QColor inactiveColor_;
     int cachedIconSize_ = 0;
     qreal cachedDpr_ = 0.0;
+    double scale_ = 1.0;
 };

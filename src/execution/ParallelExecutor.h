@@ -5,6 +5,7 @@
 #include <QFutureWatcher>
 #include <QProcess>
 #include <QTemporaryDir>
+#include <QStringList>
 #include <memory>
 #include <vector>
 
@@ -41,6 +42,13 @@ public:
     // Set compiler settings
     void setCompilerPath(const QString &path) { compilerPath_ = path; }
     void setCompilerFlags(const QString &flags) { compilerFlags_ = flags; }
+    void setLanguage(const QString &language) { language_ = language; }
+    void setPythonPath(const QString &path) { pythonPath_ = path; }
+    void setPythonArgs(const QString &args) { pythonArgs_ = args; }
+    void setJavaCompilerPath(const QString &path) { javaCompilerPath_ = path; }
+    void setJavaRunPath(const QString &path) { javaRunPath_ = path; }
+    void setJavaArgs(const QString &args) { javaArgs_ = args; }
+    void setTranscludeTemplateEnabled(bool enabled) { transcludeTemplate_ = enabled; }
     void setTimeout(int ms) { timeoutMs_ = ms; }
 
     // Run all tests in parallel (compiles once, then runs tests concurrently)
@@ -64,15 +72,27 @@ private:
     bool compile();
     TestResult runSingleTest(const TestInput &test);
     QString normalizeText(const QString &text) const;
+    QString normalizedLanguage() const;
+    QString detectJavaMainClass(const QString &code) const;
+    QStringList splitArgs(const QString &args) const;
 
     QString sourceCode_;
     QString template_ = "//#main";
     QString compilerPath_ = "g++";
     QString compilerFlags_ = "-O2 -std=c++17";
+    QString language_ = "C++";
+    QString pythonPath_ = "python3";
+    QString pythonArgs_;
+    QString javaCompilerPath_ = "javac";
+    QString javaRunPath_ = "java";
+    QString javaArgs_;
     int timeoutMs_ = 5000;
+    bool transcludeTemplate_ = false;
     
     std::unique_ptr<QTemporaryDir> tempDir_;
     QString executablePath_;
+    QString runProgram_;
+    QStringList runArgs_;
     bool running_ = false;
     bool cancelled_ = false;
 

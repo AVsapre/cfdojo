@@ -241,7 +241,7 @@ QPlainTextEdit {
     background-color: @background@;
     color: @textcolor@;
     border: 1px solid @edgecolor@;
-    font-family: "Consolas", "Monospace";
+    font-family: "Consolas", "Menlo", "DejaVu Sans Mono", "Monospace";
     font-size: 14px;
 }
 
@@ -443,34 +443,6 @@ QPushButton#ClearCasesButton:pressed {
     background-color: @redbuttonPressed@;
 }
 
-LandingButton#TrainingChoice,
-LandingButton#ContestChoice {
-    background-color: @background@;
-    border: none;
-    border-radius: 0px;
-}
-
-LandingButton#TrainingChoice {
-    border-right: 1px solid @edgecolor@;
-}
-
-LandingButton#TrainingChoice:hover,
-LandingButton#ContestChoice:hover {
-    background-color: @bgHover@;
-}
-
-LandingButton#TrainingChoice:pressed,
-LandingButton#ContestChoice:pressed {
-    background-color: @bgPressed@;
-}
-
-QLabel#LandingButtonText {
-    color: @textcolor@;
-    font-size: 22px;
-    font-weight: 600;
-    background: transparent;
-}
-
 /* LABELS */
 QLabel {
     color: @textcolor@;
@@ -480,7 +452,7 @@ QLabel {
 QLabel#EditorPlaceholder {
     color: @textcolor@;
     background: transparent;
-    font-family: "Consolas", "Monospace";
+    font-family: "Consolas", "Menlo", "DejaVu Sans Mono", "Monospace";
     font-size: 14px;
     font-weight: normal;
 }
@@ -659,19 +631,6 @@ QSpinBox::up-button:hover, QSpinBox::down-button:hover {
 QLabel#PanelSubtitle {
     color: @textcolor@;
     font-weight: 700;
-}
-
-QWidget#PlainTextBanner {
-    background-color: @background@;
-    border-bottom: 1px solid @edgecolor@;
-}
-
-QWidget#PlainTextBanner QLabel {
-    color: @textcolor@;
-}
-
-QWidget#PlainTextBanner QPushButton {
-    padding: 4px 10px;
 }
 
 QLabel#TestMetaLabel {

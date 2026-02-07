@@ -5,6 +5,8 @@
 #include <QTemporaryDir>
 #include <QElapsedTimer>
 #include <QColor>
+#include <QString>
+#include <QStringList>
 #include <memory>
 
 class QLabel;
@@ -54,6 +56,14 @@ public:
     void setTranscludeTemplateEnabled(bool enabled) { transcludeTemplate_ = enabled; }
     bool isTranscludeTemplateEnabled() const { return transcludeTemplate_; }
     void setTimeoutMs(int ms) { timeoutMs_ = ms; }
+    void setLanguage(const QString &language) { language_ = language; }
+    void setCompilerPath(const QString &path) { cppCompilerPath_ = path; }
+    void setCompilerFlags(const QString &flags) { cppCompilerFlags_ = flags; }
+    void setPythonPath(const QString &path) { pythonPath_ = path; }
+    void setPythonArgs(const QString &args) { pythonArgs_ = args; }
+    void setJavaCompilerPath(const QString &path) { javaCompilerPath_ = path; }
+    void setJavaRunPath(const QString &path) { javaRunPath_ = path; }
+    void setJavaArgs(const QString &args) { javaArgs_ = args; }
     
     // Apply transclusion: replace //#main with solution code
     QString applyTransclusion(const QString &solution) const;
@@ -82,6 +92,9 @@ private:
     void updateOutputPanels(bool showOutput, bool showError);
     void clearOutputs();
     QString normalizeText(const QString &text) const;
+    QString normalizedLanguage() const;
+    QString detectJavaMainClass(const QString &code) const;
+    QStringList splitArgs(const QString &args) const;
 
     UiBindings ui_;
     State state_ = State::Idle;
@@ -97,4 +110,14 @@ private:
     bool timedOut_ = false;
     QColor iconColor_ = QColor("#d4d4d4");
     bool transcludeTemplate_ = false;
+    QString language_ = "C++";
+    QString cppCompilerPath_ = "g++";
+    QString cppCompilerFlags_ = "-O2 -std=c++17";
+    QString pythonPath_ = "python3";
+    QString pythonArgs_;
+    QString javaCompilerPath_ = "javac";
+    QString javaRunPath_ = "java";
+    QString javaArgs_;
+    QString runProgram_;
+    QStringList runArgs_;
 };

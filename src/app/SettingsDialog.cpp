@@ -1,4 +1,5 @@
 #include "app/SettingsDialog.h"
+#include "Version.h"
 #include <QCheckBox>
 #include <QDir>
 #include <QEvent>
@@ -233,7 +234,7 @@ QWidget* SettingsDialog::createAboutTab() {
     auto *layout = new QVBoxLayout(widget);
     layout->setContentsMargins(20, 20, 20, 20);
 
-    auto *titleLabel = new QLabel("<h2>CF Dojo</h2>");
+    auto *titleLabel = new QLabel(QString("<h2>CF Dojo %1</h2>").arg(CFDojo::versionString()));
     titleLabel->setAlignment(Qt::AlignCenter);
     layout->addWidget(titleLabel);
 

@@ -154,8 +154,13 @@ bool CpackFileHandler::save(const QString &path) const {
     QDataStream stream(&file);
     stream.setByteOrder(QDataStream::LittleEndian);
 
-    // Track offsets for central directory
-    QList<QPair<QString, quint32>> fileOffsets;
+    // Track offsets for central directory (name, offset, content)
+    struct FileEntry {
+        QString name;
+        quint32 offset;
+        QByteArray content;
+    };
+    QList<FileEntry> fileEntries;
 
     // Write manifest first
     {
@@ -165,7 +170,7 @@ bool CpackFileHandler::save(const QString &path) const {
         const QByteArray nameBytes = manifestName.toUtf8();
         const quint32 crc = calculateCrc32(manifestBytes);
 
-        fileOffsets.append({manifestName, static_cast<quint32>(file.pos())});
+        fileEntries.append({manifestName, static_cast<quint32>(file.pos()), manifestBytes});
 
         stream << kLocalFileSignature;
         stream << kVersionNeeded;
@@ -190,7 +195,7 @@ bool CpackFileHandler::save(const QString &path) const {
         const QByteArray nameBytes = name.toUtf8();
         const quint32 crc = calculateCrc32(content);
 
-        fileOffsets.append({name, static_cast<quint32>(file.pos())});
+        fileEntries.append({name, static_cast<quint32>(file.pos()), content});
 
         // Local file header
         stream << kLocalFileSignature;
@@ -215,12 +220,9 @@ bool CpackFileHandler::save(const QString &path) const {
     // Central directory
     const quint32 centralDirOffset = static_cast<quint32>(file.pos());
 
-    for (const auto &entry : fileOffsets) {
-        const QString &name = entry.first;
-        const quint32 localOffset = entry.second;
-        const QByteArray &content = files_[name];
-        const QByteArray nameBytes = name.toUtf8();
-        const quint32 crc = calculateCrc32(content);
+    for (const auto &entry : fileEntries) {
+        const QByteArray nameBytes = entry.name.toUtf8();
+        const quint32 crc = calculateCrc32(entry.content);
 
         stream << kCentralDirSignature;
         stream << kVersionMade;
@@ -230,27 +232,28 @@ bool CpackFileHandler::save(const QString &path) const {
         stream << quint16(0);  // mod time
         stream << quint16(0);  // mod date
         stream << crc;
-        stream << quint32(content.size());  // compressed size
-        stream << quint32(content.size());  // uncompressed size
+        stream << quint32(entry.content.size());  // compressed size
+        stream << quint32(entry.content.size());  // uncompressed size
         stream << quint16(nameBytes.size());
         stream << quint16(0);  // extra field length
         stream << quint16(0);  // comment length
         stream << quint16(0);  // disk start
         stream << quint16(0);  // internal attributes
         stream << quint32(0);  // external attributes
-        stream << localOffset;
+        stream << entry.offset;
 
         file.write(nameBytes);
     }
 
     const quint32 centralDirSize = static_cast<quint32>(file.pos()) - centralDirOffset;
+    const quint16 totalEntries = static_cast<quint16>(fileEntries.size());
 
     // End of central directory
     stream << kEndOfCentralDirSignature;
     stream << quint16(0);  // disk number
     stream << quint16(0);  // disk with central dir
-    stream << quint16(files_.size());
-    stream << quint16(files_.size());
+    stream << totalEntries;
+    stream << totalEntries;
     stream << centralDirSize;
     stream << centralDirOffset;
     stream << quint16(0);  // comment length
