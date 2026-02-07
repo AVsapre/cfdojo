@@ -26,10 +26,11 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Setup Qt
-        uses: qt-actions/setup-qt@v2
+        uses: jurplel/install-qt-action@v4
         with:
           version: "6.5.2"
           host: ${{ matrix.host }}
+          cache: true
 
       - name: Configure CMake
         run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
