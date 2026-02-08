@@ -1,7 +1,6 @@
 #include "app/CollapsibleSplitter.h"
 
 #include <QList>
-#include <QResizeEvent>
 #include <algorithm>
 
 CollapsibleSplitter::CollapsibleSplitter(Qt::Orientation orientation, QWidget *parent)
@@ -89,10 +88,6 @@ void CollapsibleSplitter::toggleCollapse() {
     } else {
         collapse();
     }
-}
-
-void CollapsibleSplitter::resizeEvent(QResizeEvent *event) {
-    QSplitter::resizeEvent(event);
 }
 
 void CollapsibleSplitter::onSplitterMoved(int /*pos*/, int /*index*/) {

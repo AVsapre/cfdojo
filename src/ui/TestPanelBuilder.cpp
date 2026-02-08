@@ -212,7 +212,7 @@ TestPanelBuilder::CaseWidgets TestPanelBuilder::createCase(QWidget *parent,
     layout->addWidget(expectedBlock);
 
     // Setup placeholder behavior for input/expected editors
-    auto setupPlaceholder = [context](AutoResizingTextEdit *editor, const QString &placeholder) {
+    auto setupPlaceholder = [](AutoResizingTextEdit *editor, const QString &placeholder) {
         if (!editor) {
             return;
         }
@@ -228,8 +228,11 @@ TestPanelBuilder::CaseWidgets TestPanelBuilder::createCase(QWidget *parent,
                 safeEditor->setPlaceholderVisible(true);
             }
         };
-        QObject::connect(editor, &AutoResizingTextEdit::textChanged, context, updatePlaceholder);
-        QObject::connect(qApp, &QApplication::focusChanged, context,
+        QObject::connect(editor, &AutoResizingTextEdit::textChanged, editor, updatePlaceholder);
+        // Connect to focusChanged with the editor as context so the connection
+        // is automatically severed when the editor is destroyed, preventing
+        // O(n) lambda accumulation.
+        QObject::connect(qApp, &QApplication::focusChanged, editor,
                          [updatePlaceholder](QWidget*, QWidget*) { updatePlaceholder(); });
         updatePlaceholder();
     };

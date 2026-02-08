@@ -1,5 +1,7 @@
 #pragma once
 
+#include "execution/CompilationConfig.h"
+
 #include <QObject>
 #include <QProcess>
 #include <QTemporaryDir>
@@ -25,7 +27,6 @@ public:
         Idle,
         Compiling,
         Running,
-        Finished
     };
     Q_ENUM(State)
 
@@ -50,23 +51,14 @@ public:
     void stop();
     void setIconTintColor(const QColor &color);
     
-    // Set template for transclusion (//#main is replaced with solution code)
-    void setTemplate(const QString &tmpl) { template_ = tmpl; }
-    QString getTemplate() const { return template_; }
-    void setTranscludeTemplateEnabled(bool enabled) { transcludeTemplate_ = enabled; }
-    bool isTranscludeTemplateEnabled() const { return transcludeTemplate_; }
+    void setConfig(const CompilationConfig &cfg) { config_ = cfg; }
+    const CompilationConfig &config() const { return config_; }
+
     void setTimeoutMs(int ms) { timeoutMs_ = ms; }
-    void setLanguage(const QString &language) { language_ = language; }
-    void setCompilerPath(const QString &path) { cppCompilerPath_ = path; }
-    void setCompilerFlags(const QString &flags) { cppCompilerFlags_ = flags; }
-    void setPythonPath(const QString &path) { pythonPath_ = path; }
-    void setPythonArgs(const QString &args) { pythonArgs_ = args; }
-    void setJavaCompilerPath(const QString &path) { javaCompilerPath_ = path; }
-    void setJavaRunPath(const QString &path) { javaRunPath_ = path; }
-    void setJavaArgs(const QString &args) { javaArgs_ = args; }
-    
-    // Apply transclusion: replace //#main with solution code
-    QString applyTransclusion(const QString &solution) const;
+    void setStatusColors(const QColor &ac, const QColor &err) {
+        statusAcColor_ = ac;
+        statusErrorColor_ = err;
+    }
     
     State state() const { return state_; }
     qint64 lastExecutionTimeMs() const { return lastExecutionTimeMs_; }
@@ -91,14 +83,10 @@ private:
     void updateStatus(const QString &status);
     void updateOutputPanels(bool showOutput, bool showError);
     void clearOutputs();
-    QString normalizeText(const QString &text) const;
-    QString normalizedLanguage() const;
-    QString detectJavaMainClass(const QString &code) const;
-    QStringList splitArgs(const QString &args) const;
 
     UiBindings ui_;
+    CompilationConfig config_;
     State state_ = State::Idle;
-    QString template_ = "//#main";  // Default template (just transcludes solution)
     QProcess *compilerProcess_;
     QProcess *runProcess_;
     std::unique_ptr<QTemporaryDir> tempDir_;
@@ -109,15 +97,8 @@ private:
     int timeoutMs_ = 5000;
     bool timedOut_ = false;
     QColor iconColor_ = QColor("#d4d4d4");
-    bool transcludeTemplate_ = false;
-    QString language_ = "C++";
-    QString cppCompilerPath_ = "g++";
-    QString cppCompilerFlags_ = "-O2 -std=c++17";
-    QString pythonPath_ = "python3";
-    QString pythonArgs_;
-    QString javaCompilerPath_ = "javac";
-    QString javaRunPath_ = "java";
-    QString javaArgs_;
     QString runProgram_;
     QStringList runArgs_;
+    QColor statusAcColor_{"#2e7d32"};
+    QColor statusErrorColor_{"#c42b1c"};
 };

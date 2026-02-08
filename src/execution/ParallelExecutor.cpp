@@ -1,4 +1,5 @@
 #include "execution/ParallelExecutor.h"
+#include "execution/CompilationUtils.h"
 
 #include <QDir>
 #include <QElapsedTimer>
@@ -10,6 +11,7 @@
 #include <QTemporaryDir>
 #include <QTextStream>
 #include <QtConcurrent>
+#include <csignal>
 
 ParallelExecutor::ParallelExecutor(QObject *parent)
     : QObject(parent),
@@ -45,57 +47,7 @@ void ParallelExecutor::setSourceCode(const QString &code) {
     sourceCode_ = code;
 }
 
-void ParallelExecutor::setTemplate(const QString &tmpl) {
-    template_ = tmpl.isEmpty() ? "//#main" : tmpl;
-}
 
-QString ParallelExecutor::applyTransclusion(const QString &solution) const {
-    if (!transcludeTemplate_) {
-        return solution;
-    }
-    if (template_.contains("//#main")) {
-        QString result = template_;
-        return result.replace("//#main", solution);
-    }
-    return solution;
-}
-
-QString ParallelExecutor::normalizedLanguage() const {
-    const QString normalized = language_.trimmed().toLower();
-    if (normalized == "python" || normalized == "py") {
-        return "Python";
-    }
-    if (normalized == "java") {
-        return "Java";
-    }
-    return "C++";
-}
-
-QString ParallelExecutor::detectJavaMainClass(const QString &code) const {
-    const QRegularExpression publicClassPattern(
-        "\\bpublic\\s+class\\s+([A-Za-z_][A-Za-z0-9_]*)\\b");
-    QRegularExpressionMatch match = publicClassPattern.match(code);
-    if (match.hasMatch()) {
-        return match.captured(1);
-    }
-
-    const QRegularExpression classPattern(
-        "\\bclass\\s+([A-Za-z_][A-Za-z0-9_]*)\\b");
-    match = classPattern.match(code);
-    if (match.hasMatch()) {
-        return match.captured(1);
-    }
-
-    return "Solution";
-}
-
-QStringList ParallelExecutor::splitArgs(const QString &args) const {
-    const QString trimmed = args.trimmed();
-    if (trimmed.isEmpty()) {
-        return {};
-    }
-    return QProcess::splitCommand(trimmed);
-}
 
 void ParallelExecutor::runAll(const std::vector<TestInput> &tests) {
     if (running_) {
@@ -107,6 +59,10 @@ void ParallelExecutor::runAll(const std::vector<TestInput> &tests) {
     
     emit compilationStarted();
     
+    // Snapshot shared state so worker threads never touch member fields.
+    const QString runProgram = runProgram_;
+    const QStringList runArgs = runArgs_;
+
     // Run compilation on a background thread to avoid blocking the GUI
     std::vector<TestInput> testsCopy = tests;
     auto compileFuture = QtConcurrent::run([this, testsCopy]() {
@@ -115,7 +71,14 @@ void ParallelExecutor::runAll(const std::vector<TestInput> &tests) {
             return;
         }
 
-        QMetaObject::invokeMethod(this, [this, testsCopy]() {
+        // Snapshot fields set by compile() — these are safe to read here
+        // because compile() just finished on this same thread.
+        const QString snapshotRunProgram = runProgram_;
+        const QStringList snapshotRunArgs = runArgs_;
+        const QString snapshotTempPath = tempDir_ ? tempDir_->path() : QString();
+        const int snapshotTimeoutMs = timeoutMs_;
+
+        QMetaObject::invokeMethod(this, [this, testsCopy, snapshotRunProgram, snapshotRunArgs, snapshotTempPath, snapshotTimeoutMs]() {
             emit compilationFinished(true, QString());
 
             // Run tests in parallel using QtConcurrent
@@ -124,14 +87,14 @@ void ParallelExecutor::runAll(const std::vector<TestInput> &tests) {
             results_.assign(static_cast<size_t>(expectedResults_), TestResult{});
 
             auto future = QtConcurrent::mapped(testList,
-                [this](const TestInput &test) -> TestResult {
+                [this, snapshotRunProgram, snapshotRunArgs, snapshotTempPath, snapshotTimeoutMs](const TestInput &test) -> TestResult {
                     if (cancelled_) {
                         TestResult r;
                         r.testIndex = test.testIndex;
                         r.error = "Cancelled";
                         return r;
                     }
-                    return runSingleTest(test);
+                    return runSingleTest(test, snapshotRunProgram, snapshotRunArgs, snapshotTempPath, snapshotTimeoutMs);
                 });
             watcher_->setFuture(future);
         }, Qt::QueuedConnection);
@@ -142,18 +105,21 @@ bool ParallelExecutor::compile() {
     // Create temp directory
     tempDir_ = std::make_unique<QTemporaryDir>();
     if (!tempDir_->isValid()) {
-        emit compilationFinished(false, "Failed to create temporary directory");
+        QMetaObject::invokeMethod(this, [this]() {
+            emit compilationFinished(false, "Failed to create temporary directory");
+        }, Qt::QueuedConnection);
         return false;
     }
     
     const QString tempPath = tempDir_->path();
-    const QString code = applyTransclusion(sourceCode_);
-    const QString language = normalizedLanguage();
+    const QString code = CompilationUtils::applyTransclusion(
+        config_.templateCode, sourceCode_, config_.transcludeTemplate);
+    const QString language = CompilationUtils::normalizeLanguage(config_.language);
     const QString sourceExt = language == "Python" ? "py"
                            : language == "Java"   ? "java"
                                                    : "cpp";
     const QString sourceBaseName =
-        language == "Java" ? detectJavaMainClass(code) : "solution";
+        language == "Java" ? CompilationUtils::detectJavaMainClass(code) : "solution";
     const QString sourcePath =
         QDir(tempPath).filePath(QString("%1.%2").arg(sourceBaseName, sourceExt));
 #ifdef Q_OS_WIN
@@ -167,7 +133,9 @@ bool ParallelExecutor::compile() {
 
     QFile file(sourcePath);
     if (!file.open(QIODevice::WriteOnly | QIODevice::Text)) {
-        emit compilationFinished(false, "Failed to write source file");
+        QMetaObject::invokeMethod(this, [this]() {
+            emit compilationFinished(false, "Failed to write source file");
+        }, Qt::QueuedConnection);
         return false;
     }
     
@@ -182,8 +150,8 @@ bool ParallelExecutor::compile() {
 #else
         const QString defaultPython = "python3";
 #endif
-        runProgram_ = pythonPath_.trimmed().isEmpty() ? defaultPython : pythonPath_.trimmed();
-        runArgs_ = splitArgs(pythonArgs_);
+        runProgram_ = config_.pythonPath.trimmed().isEmpty() ? defaultPython : config_.pythonPath.trimmed();
+        runArgs_ = CompilationUtils::splitArgs(config_.pythonArgs);
         runArgs_ << sourcePath;
         return true;
     }
@@ -193,29 +161,33 @@ bool ParallelExecutor::compile() {
 
     if (language == "Java") {
         const QString javacPath =
-            javaCompilerPath_.trimmed().isEmpty() ? "javac" : javaCompilerPath_.trimmed();
+            config_.javaCompilerPath.trimmed().isEmpty() ? "javac" : config_.javaCompilerPath.trimmed();
         compiler.start(javacPath, {sourcePath});
     } else {
-        QStringList args = splitArgs(compilerFlags_);
+        QStringList args = CompilationUtils::splitArgs(config_.cppCompilerFlags);
         args << sourcePath << "-o" << executablePath_;
         const QString compilerPath =
-            compilerPath_.trimmed().isEmpty() ? "g++" : compilerPath_.trimmed();
+            config_.cppCompilerPath.trimmed().isEmpty() ? "g++" : config_.cppCompilerPath.trimmed();
         compiler.start(compilerPath, args);
     }
     if (!compiler.waitForFinished(30000)) {
-        emit compilationFinished(false, "Compilation timed out");
+        QMetaObject::invokeMethod(this, [this]() {
+            emit compilationFinished(false, "Compilation timed out");
+        }, Qt::QueuedConnection);
         return false;
     }
     
     if (compiler.exitCode() != 0) {
         const QString error = QString::fromUtf8(compiler.readAllStandardError());
-        emit compilationFinished(false, error);
+        QMetaObject::invokeMethod(this, [this, error]() {
+            emit compilationFinished(false, error);
+        }, Qt::QueuedConnection);
         return false;
     }
     
     if (language == "Java") {
-        runProgram_ = javaRunPath_.trimmed().isEmpty() ? "java" : javaRunPath_.trimmed();
-        runArgs_ = splitArgs(javaArgs_);
+        runProgram_ = config_.javaRunPath.trimmed().isEmpty() ? "java" : config_.javaRunPath.trimmed();
+        runArgs_ = CompilationUtils::splitArgs(config_.javaArgs);
         runArgs_ << "-cp" << tempPath << sourceBaseName;
     } else {
         runProgram_ = executablePath_;
@@ -224,22 +196,26 @@ bool ParallelExecutor::compile() {
     return true;
 }
 
-TestResult ParallelExecutor::runSingleTest(const TestInput &test) {
+TestResult ParallelExecutor::runSingleTest(const TestInput &test,
+                                           const QString &program,
+                                           const QStringList &args,
+                                           const QString &workDir,
+                                           int timeoutMs) {
     TestResult result;
     result.testIndex = test.testIndex;
     
     QElapsedTimer timer;
     timer.start();
     
-    if (runProgram_.isEmpty()) {
+    if (program.isEmpty()) {
         result.error = "Execution command is not configured";
         result.exitCode = -1;
         return result;
     }
 
     QProcess process;
-    process.setWorkingDirectory(tempDir_ ? tempDir_->path() : QString());
-    process.start(runProgram_, runArgs_);
+    process.setWorkingDirectory(workDir);
+    process.start(program, args);
     
     if (!process.waitForStarted(1000)) {
         result.error = "Failed to start process";
@@ -252,7 +228,14 @@ TestResult ParallelExecutor::runSingleTest(const TestInput &test) {
     process.closeWriteChannel();
     
     // Wait for completion with timeout
-    if (!process.waitForFinished(timeoutMs_)) {
+    if (!process.waitForFinished(timeoutMs)) {
+        // Kill the entire process group to avoid orphans
+#ifdef Q_OS_UNIX
+        const qint64 childPid = process.processId();
+        if (childPid > 0) {
+            ::kill(-static_cast<pid_t>(childPid), SIGKILL);
+        }
+#endif
         process.kill();
         process.waitForFinished(1000);
         result.error = "Time Limit Exceeded";
@@ -268,35 +251,17 @@ TestResult ParallelExecutor::runSingleTest(const TestInput &test) {
     
     // Check if output matches expected
     if (result.exitCode == 0 && result.error.isEmpty()) {
-        result.passed = (normalizeText(result.output) == normalizeText(test.expectedOutput));
+        result.passed = (CompilationUtils::normalizeText(result.output) == CompilationUtils::normalizeText(test.expectedOutput));
     }
     
     return result;
-}
-
-QString ParallelExecutor::normalizeText(const QString &text) const {
-    QString normalized = text;
-    normalized.replace("\r\n", "\n");
-    normalized.replace("\r", "\n");
-    
-    // Remove trailing whitespace from each line and trailing newlines
-    QStringList lines = normalized.split('\n');
-    while (!lines.isEmpty() && lines.last().trimmed().isEmpty()) {
-        lines.removeLast();
-    }
-    for (QString &line : lines) {
-        while (line.endsWith(' ') || line.endsWith('\t')) {
-            line.chop(1);
-        }
-    }
-    return lines.join('\n');
 }
 
 void ParallelExecutor::cancel() {
     cancelled_ = true;
     if (watcher_ && watcher_->isRunning()) {
         watcher_->cancel();
-        watcher_->waitForFinished();
+        // Don't block the GUI thread; let the watcher's finished signal clean up
     }
     running_ = false;
 }

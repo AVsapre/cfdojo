@@ -3,6 +3,7 @@
 #include "app/CollapsibleSplitter.h"
 #include "app/SettingsDialog.h"
 #include "companion/CompanionListener.h"
+#include "execution/CompilationUtils.h"
 #include "file/CpackFileHandler.h"
 #include "ui/AutoResizingTextEdit.h"
 #include "ui/FileExplorerBuilder.h"
@@ -67,23 +68,12 @@ namespace {
 constexpr int kActivityBarWidth = 50;
 constexpr int kSidePanelDefaultWidth = 240;
 constexpr int kSidePanelMinWidth = 175;
-const QString kTemplateMarker = QStringLiteral("//#main");
 
-QString loadDefaultTemplate() {
+QString loadDefaultTemplate(const QString &language) {
     QSettings settings("CF Dojo", "CF Dojo");
-    const QString stored = settings.value("defaultTemplate").toString();
-    return stored.isEmpty() ? kTemplateMarker : stored;
-}
-
-QString normalizeLanguageName(const QString &language) {
-    const QString normalized = language.trimmed().toLower();
-    if (normalized == "python" || normalized == "py") {
-        return "Python";
-    }
-    if (normalized == "java") {
-        return "Java";
-    }
-    return "C++";
+    const QString key = QStringLiteral("defaultTemplate/%1").arg(language);
+    const QString stored = settings.value(key).toString();
+    return stored.isEmpty() ? QString{CompilationUtils::kDefaultTemplateCode} : stored;
 }
 
 struct RegressionResult {
@@ -221,11 +211,15 @@ MainWindow::MainWindow(QWidget *parent)
       executionController_(new ExecutionController(this)),
       parallelExecutor_(new ParallelExecutor(this)),
       baseAppFont_(qApp->font()) {
-    currentTemplate_ = loadDefaultTemplate();
     loadRuntimeSettings();
+    currentTemplate_ = defaultTemplates_.value(
+        CompilationUtils::normalizeLanguage(defaultLanguage_),
+        QString{CompilationUtils::kDefaultTemplateCode});
     applyRuntimeSettings();
     themeManager_.apply(qApp, uiScale_);
     executionController_->setIconTintColor(themeManager_.textColor());
+    executionController_->setStatusColors(themeManager_.colors().statusAc,
+                                          themeManager_.colors().statusError);
     setupUi();
     setupZoomShortcuts();
     setupCompanionListener();
@@ -299,7 +293,15 @@ MainWindow::MainWindow(QWidget *parent)
     });
 }
 
-MainWindow::~MainWindow() = default;
+MainWindow::~MainWindow() {
+    // Ensure any in-flight stress test future finishes before members are
+    // destroyed.  Without this, QtConcurrent may dereference a dangling
+    // pointer to this MainWindow.
+    if (stressWatcher_) {
+        stressWatcher_->cancel();
+        stressWatcher_->waitForFinished();
+    }
+}
 
 void MainWindow::loadRuntimeSettings() {
     QSettings settings("CF Dojo", "CF Dojo");
@@ -311,16 +313,20 @@ void MainWindow::loadRuntimeSettings() {
         settings.value("autosaveIntervalSec", 15).toInt(), 5, 300);
     autosaveIntervalMs_ = autosaveSec * 1000;
 
-    defaultLanguage_ = normalizeLanguageName(
+    defaultLanguage_ = CompilationUtils::normalizeLanguage(
         settings.value("defaultLanguage", "C++").toString());
     currentLanguage_ = defaultLanguage_;
-    cppCompilerPath_ = settings.value("cppCompilerPath", "g++").toString();
-    cppCompilerFlags_ = settings.value("cppCompilerFlags", "-O2 -std=c++17").toString();
-    pythonPath_ = settings.value("pythonPath", "python3").toString();
-    pythonArgs_ = settings.value("pythonArgs", "").toString();
-    javaCompilerPath_ = settings.value("javaCompilerPath", "javac").toString();
-    javaRunPath_ = settings.value("javaRunPath", "java").toString();
-    javaArgs_ = settings.value("javaArgs", "").toString();
+    compilationConfig_.cppCompilerPath = settings.value("cppCompilerPath", "g++").toString();
+    compilationConfig_.cppCompilerFlags = settings.value("cppCompilerFlags", "-O2 -std=c++17").toString();
+    compilationConfig_.pythonPath = settings.value("pythonPath", "python3").toString();
+    compilationConfig_.pythonArgs = settings.value("pythonArgs", "").toString();
+    compilationConfig_.javaCompilerPath = settings.value("javaCompilerPath", "javac").toString();
+    compilationConfig_.javaRunPath = settings.value("javaRunPath", "java").toString();
+    compilationConfig_.javaArgs = settings.value("javaArgs", "").toString();
+
+    for (const QString &lang : CompilationUtils::supportedLanguages()) {
+        defaultTemplates_[lang] = loadDefaultTemplate(lang);
+    }
 
     fileExplorerRootDir_ = settings.value("rootDir", QDir::currentPath()).toString();
 
@@ -334,28 +340,14 @@ void MainWindow::loadRuntimeSettings() {
 }
 
 void MainWindow::applyRuntimeSettings() {
-    const QString activeLanguage = normalizeLanguageName(currentLanguage_);
+    compilationConfig_.language = CompilationUtils::normalizeLanguage(currentLanguage_);
+    compilationConfig_.transcludeTemplate = transcludeTemplateEnabled_;
+    compilationConfig_.templateCode = currentTemplate_;
     if (executionController_) {
-        executionController_->setTranscludeTemplateEnabled(transcludeTemplateEnabled_);
-        executionController_->setLanguage(activeLanguage);
-        executionController_->setCompilerPath(cppCompilerPath_);
-        executionController_->setCompilerFlags(cppCompilerFlags_);
-        executionController_->setPythonPath(pythonPath_);
-        executionController_->setPythonArgs(pythonArgs_);
-        executionController_->setJavaCompilerPath(javaCompilerPath_);
-        executionController_->setJavaRunPath(javaRunPath_);
-        executionController_->setJavaArgs(javaArgs_);
+        executionController_->setConfig(compilationConfig_);
     }
     if (parallelExecutor_) {
-        parallelExecutor_->setTranscludeTemplateEnabled(transcludeTemplateEnabled_);
-        parallelExecutor_->setLanguage(activeLanguage);
-        parallelExecutor_->setCompilerPath(cppCompilerPath_);
-        parallelExecutor_->setCompilerFlags(cppCompilerFlags_);
-        parallelExecutor_->setPythonPath(pythonPath_);
-        parallelExecutor_->setPythonArgs(pythonArgs_);
-        parallelExecutor_->setJavaCompilerPath(javaCompilerPath_);
-        parallelExecutor_->setJavaRunPath(javaRunPath_);
-        parallelExecutor_->setJavaArgs(javaArgs_);
+        parallelExecutor_->setConfig(compilationConfig_);
     }
 }
 
@@ -391,7 +383,7 @@ QString MainWindow::languageForPath(const QString &path) const {
 }
 
 void MainWindow::setCurrentLanguage(const QString &language) {
-    currentLanguage_ = normalizeLanguageName(language);
+    currentLanguage_ = CompilationUtils::normalizeLanguage(language);
     applyRuntimeSettings();
 }
 
@@ -476,37 +468,28 @@ void MainWindow::setupActivityBar() {
     sidebarToggle_->setChecked(true);
     applyActivityTint(sidebarToggle_);
 
-    connect(sidebarToggle_, &QPushButton::clicked, this, [this]() {
-        if (!mainSplitter_ || !sideStack_) {
+    // Helper: switch side panel to the given widget and update check states
+    auto switchPanel = [this](QWidget *panel) {
+        if (!mainSplitter_ || !sideStack_ || !panel) return;
+        sideStack_->setCurrentWidget(panel);
+        if (mainSplitter_->isCollapsed()) mainSplitter_->expand();
+        for (auto *btn : {sidebarToggle_, stressTestButton_, templateButton_, newFileButton_}) {
+            if (btn) btn->setChecked(false);
+        }
+        // The caller's button gets re-checked via updateActivityBarActiveStates below
+    };
+
+    connect(sidebarToggle_, &QPushButton::clicked, this, [this, switchPanel]() {
+        if (!mainSplitter_ || !sideStack_) return;
+        // If already showing test panel and not collapsed, collapse
+        if (!mainSplitter_->isCollapsed() &&
+            sideStack_->currentWidget() == testPanelWidgets_.panel) {
+            mainSplitter_->collapse();
+            sidebarToggle_->setChecked(false);
             return;
         }
-        if (mainSplitter_->isCollapsed()) {
-            sideStack_->setCurrentWidget(testPanelWidgets_.panel);
-            mainSplitter_->expand();
-            sidebarToggle_->setChecked(true);
-            newFileButton_->setChecked(false);
-            if (stressTestButton_) {
-                stressTestButton_->setChecked(false);
-            }
-            if (templateButton_) {
-                templateButton_->setChecked(false);
-            }
-            return;
-        }
-        if (sideStack_->currentWidget() != testPanelWidgets_.panel) {
-            sideStack_->setCurrentWidget(testPanelWidgets_.panel);
-            sidebarToggle_->setChecked(true);
-            newFileButton_->setChecked(false);
-            if (stressTestButton_) {
-                stressTestButton_->setChecked(false);
-            }
-            if (templateButton_) {
-                templateButton_->setChecked(false);
-            }
-            return;
-        }
-        mainSplitter_->collapse();
-        sidebarToggle_->setChecked(false);
+        switchPanel(testPanelWidgets_.panel);
+        sidebarToggle_->setChecked(true);
     });
 
     // Stress test button
@@ -518,27 +501,9 @@ void MainWindow::setupActivityBar() {
     stressTestButton_->setChecked(false);
     applyActivityTint(stressTestButton_);
 
-    connect(stressTestButton_, &QPushButton::clicked, this, [this]() {
-        if (!mainSplitter_ || !sideStack_ || !stressTestPanel_) {
-            return;
-        }
-
-        sideStack_->setCurrentWidget(stressTestPanel_);
-        if (mainSplitter_->isCollapsed()) {
-            mainSplitter_->expand();
-        }
-        if (stressTestButton_) {
-            stressTestButton_->setChecked(true);
-        }
-        if (sidebarToggle_) {
-            sidebarToggle_->setChecked(false);
-        }
-        if (templateButton_) {
-            templateButton_->setChecked(false);
-        }
-        if (newFileButton_) {
-            newFileButton_->setChecked(false);
-        }
+    connect(stressTestButton_, &QPushButton::clicked, this, [this, switchPanel]() {
+        switchPanel(stressTestPanel_);
+        if (stressTestButton_) stressTestButton_->setChecked(true);
     });
 
     // Template editor button
@@ -550,24 +515,9 @@ void MainWindow::setupActivityBar() {
     templateButton_->setChecked(false);
     applyActivityTint(templateButton_);
 
-    connect(templateButton_, &QPushButton::clicked, this, [this]() {
-        if (!mainSplitter_ || !sideStack_ || !cpackPanel_) {
-            return;
-        }
-        sideStack_->setCurrentWidget(cpackPanel_);
-        if (mainSplitter_->isCollapsed()) {
-            mainSplitter_->expand();
-        }
-        templateButton_->setChecked(true);
-        if (sidebarToggle_) {
-            sidebarToggle_->setChecked(false);
-        }
-        if (stressTestButton_) {
-            stressTestButton_->setChecked(false);
-        }
-        if (newFileButton_) {
-            newFileButton_->setChecked(false);
-        }
+    connect(templateButton_, &QPushButton::clicked, this, [this, switchPanel]() {
+        switchPanel(cpackPanel_);
+        if (templateButton_) templateButton_->setChecked(true);
     });
 
     layout->addWidget(sidebarToggle_, 0, Qt::AlignTop);
@@ -590,22 +540,9 @@ void MainWindow::setupActivityBar() {
     newFileButton_->setChecked(false);
     applyActivityTint(newFileButton_);
 
-    connect(newFileButton_, &QPushButton::clicked, this, [this]() {
-        if (!mainSplitter_ || !sideStack_ || !fileExplorer_) {
-            return;
-        }
-        sideStack_->setCurrentWidget(fileExplorer_);
-        if (mainSplitter_->isCollapsed()) {
-            mainSplitter_->expand();
-        }
-        newFileButton_->setChecked(true);
-        sidebarToggle_->setChecked(false);
-        if (stressTestButton_) {
-            stressTestButton_->setChecked(false);
-        }
-        if (templateButton_) {
-            templateButton_->setChecked(false);
-        }
+    connect(newFileButton_, &QPushButton::clicked, this, [this, switchPanel]() {
+        switchPanel(fileExplorer_);
+        if (newFileButton_) newFileButton_->setChecked(true);
     });
 
     settingsButton_ = new ActivityBarButton(":/images/settings.svg", bottomPanel);
@@ -639,30 +576,37 @@ void MainWindow::setupActivityBar() {
     edgeLine->setFixedWidth(1);
     edgeLine->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Expanding);
     barLayout->addWidget(edgeLine);
-    syncTemplateToggleUi();
 }
 
 void MainWindow::openSettingsDialog() {
-    if (!settingsWindow_) {
-        settingsWindow_ = new SettingsDialog(this);
-        settingsWindow_->setTemplate(currentTemplate_);
+    auto populateSettings = [this]() {
+        for (const QString &lang : CompilationUtils::supportedLanguages()) {
+            settingsWindow_->setTemplateForLanguage(
+                lang, defaultTemplates_.value(
+                    lang, QString{CompilationUtils::kDefaultTemplateCode}));
+        }
         settingsWindow_->setMultithreadingEnabled(multithreadingEnabled_);
         settingsWindow_->setTranscludeTemplateEnabled(defaultTranscludeTemplateEnabled_);
         settingsWindow_->setAutosaveIntervalSeconds(autosaveIntervalMs_ / 1000);
         settingsWindow_->setDefaultLanguage(defaultLanguage_);
-        settingsWindow_->setCompilerPath(cppCompilerPath_);
-        settingsWindow_->setCompilerFlags(cppCompilerFlags_);
-        settingsWindow_->setPythonPath(pythonPath_);
-        settingsWindow_->setPythonArgs(pythonArgs_);
-        settingsWindow_->setJavaCompilerPath(javaCompilerPath_);
-        settingsWindow_->setJavaRunPath(javaRunPath_);
-        settingsWindow_->setJavaArgs(javaArgs_);
+        settingsWindow_->setCompilerPath(compilationConfig_.cppCompilerPath);
+        settingsWindow_->setCompilerFlags(compilationConfig_.cppCompilerFlags);
+        settingsWindow_->setPythonPath(compilationConfig_.pythonPath);
+        settingsWindow_->setPythonArgs(compilationConfig_.pythonArgs);
+        settingsWindow_->setJavaCompilerPath(compilationConfig_.javaCompilerPath);
+        settingsWindow_->setJavaRunPath(compilationConfig_.javaRunPath);
+        settingsWindow_->setJavaArgs(compilationConfig_.javaArgs);
         settingsWindow_->setRootDir(fileExplorerRootDir_);
+    };
 
-        connect(settingsWindow_, &SettingsDialog::settingsChanged, this, [this]() {
-            currentTemplate_ = settingsWindow_->getTemplate();
-            markDirty();
-        });
+    if (!settingsWindow_) {
+        settingsWindow_ = new SettingsDialog(this);
+        populateSettings();
+
+        // Note: We do NOT connect settingsChanged to markDirty here.
+        // The settings dialog marks things as changed on any widget interaction,
+        // which would incorrectly dirty the document. Only the 'saved' signal
+        // should actually update state.
 
         connect(settingsWindow_, &QWidget::destroyed, this, [this]() {
             if (settingsButton_) {
@@ -679,25 +623,31 @@ void MainWindow::openSettingsDialog() {
         });
 
         connect(settingsWindow_, &SettingsDialog::saved, this, [this]() {
-            currentTemplate_ = settingsWindow_->getTemplate();
             QSettings settings("CF Dojo", "CF Dojo");
-            settings.setValue("defaultTemplate", currentTemplate_);
+            for (const QString &lang : CompilationUtils::supportedLanguages()) {
+                defaultTemplates_[lang] = settingsWindow_->getTemplateForLanguage(lang);
+                settings.setValue(QStringLiteral("defaultTemplate/%1").arg(lang),
+                                  defaultTemplates_[lang]);
+            }
+            currentTemplate_ = defaultTemplates_.value(
+                CompilationUtils::normalizeLanguage(currentLanguage_),
+                QString{CompilationUtils::kDefaultTemplateCode});
             multithreadingEnabled_ = settingsWindow_->isMultithreadingEnabled();
             defaultTranscludeTemplateEnabled_ =
                 settingsWindow_->isTranscludeTemplateEnabled();
             settings.setValue("transcludeTemplate", defaultTranscludeTemplateEnabled_);
-            const QString previousDefaultLanguage = normalizeLanguageName(defaultLanguage_);
-            defaultLanguage_ = normalizeLanguageName(settingsWindow_->defaultLanguage());
-            if (normalizeLanguageName(currentLanguage_) == previousDefaultLanguage) {
+            const QString previousDefaultLanguage = CompilationUtils::normalizeLanguage(defaultLanguage_);
+            defaultLanguage_ = CompilationUtils::normalizeLanguage(settingsWindow_->defaultLanguage());
+            if (CompilationUtils::normalizeLanguage(currentLanguage_) == previousDefaultLanguage) {
                 currentLanguage_ = defaultLanguage_;
             }
-            cppCompilerPath_ = settingsWindow_->compilerPath();
-            cppCompilerFlags_ = settingsWindow_->compilerFlags();
-            pythonPath_ = settingsWindow_->pythonPath();
-            pythonArgs_ = settingsWindow_->pythonArgs();
-            javaCompilerPath_ = settingsWindow_->javaCompilerPath();
-            javaRunPath_ = settingsWindow_->javaRunPath();
-            javaArgs_ = settingsWindow_->javaArgs();
+            compilationConfig_.cppCompilerPath = settingsWindow_->compilerPath();
+            compilationConfig_.cppCompilerFlags = settingsWindow_->compilerFlags();
+            compilationConfig_.pythonPath = settingsWindow_->pythonPath();
+            compilationConfig_.pythonArgs = settingsWindow_->pythonArgs();
+            compilationConfig_.javaCompilerPath = settingsWindow_->javaCompilerPath();
+            compilationConfig_.javaRunPath = settingsWindow_->javaRunPath();
+            compilationConfig_.javaArgs = settingsWindow_->javaArgs();
             fileExplorerRootDir_ = settingsWindow_->rootDir().trimmed();
             if (fileExplorerRootDir_.isEmpty() ||
                 !QFileInfo::exists(fileExplorerRootDir_) ||
@@ -714,13 +664,13 @@ void MainWindow::openSettingsDialog() {
                 scheduleAutosave();
             }
             settings.setValue("defaultLanguage", defaultLanguage_);
-            settings.setValue("cppCompilerPath", cppCompilerPath_);
-            settings.setValue("cppCompilerFlags", cppCompilerFlags_);
-            settings.setValue("pythonPath", pythonPath_);
-            settings.setValue("pythonArgs", pythonArgs_);
-            settings.setValue("javaCompilerPath", javaCompilerPath_);
-            settings.setValue("javaRunPath", javaRunPath_);
-            settings.setValue("javaArgs", javaArgs_);
+            settings.setValue("cppCompilerPath", compilationConfig_.cppCompilerPath);
+            settings.setValue("cppCompilerFlags", compilationConfig_.cppCompilerFlags);
+            settings.setValue("pythonPath", compilationConfig_.pythonPath);
+            settings.setValue("pythonArgs", compilationConfig_.pythonArgs);
+            settings.setValue("javaCompilerPath", compilationConfig_.javaCompilerPath);
+            settings.setValue("javaRunPath", compilationConfig_.javaRunPath);
+            settings.setValue("javaArgs", compilationConfig_.javaArgs);
             if (settingsButton_) {
                 settingsButton_->setChecked(false);
                 settingsButton_->setActiveState(false);
@@ -734,19 +684,7 @@ void MainWindow::openSettingsDialog() {
             }
         });
     } else {
-        settingsWindow_->setTemplate(currentTemplate_);
-        settingsWindow_->setMultithreadingEnabled(multithreadingEnabled_);
-        settingsWindow_->setTranscludeTemplateEnabled(defaultTranscludeTemplateEnabled_);
-        settingsWindow_->setAutosaveIntervalSeconds(autosaveIntervalMs_ / 1000);
-        settingsWindow_->setDefaultLanguage(defaultLanguage_);
-        settingsWindow_->setCompilerPath(cppCompilerPath_);
-        settingsWindow_->setCompilerFlags(cppCompilerFlags_);
-        settingsWindow_->setPythonPath(pythonPath_);
-        settingsWindow_->setPythonArgs(pythonArgs_);
-        settingsWindow_->setJavaCompilerPath(javaCompilerPath_);
-        settingsWindow_->setJavaRunPath(javaRunPath_);
-        settingsWindow_->setJavaArgs(javaArgs_);
-        settingsWindow_->setRootDir(fileExplorerRootDir_);
+        populateSettings();
     }
 
     if (settingsButton_) {
@@ -765,9 +703,6 @@ void MainWindow::setupMainEditor() {
     if (codeEditor_) {
         connect(codeEditor_, &QsciScintilla::textChanged, this, [this]() {
             markDirty();
-            if (transcludeTemplateEnabled_ && editorMode_ == EditorMode::Template) {
-                updateTemplateMarkerVisibility();
-            }
         });
         codeEditor_->setContextMenuPolicy(Qt::CustomContextMenu);
         connect(codeEditor_, &QsciScintilla::customContextMenuRequested, this,
@@ -898,15 +833,16 @@ void MainWindow::setupMainEditor() {
         if (!fileModel_ || !codeEditor_ || fileModel_->isDir(index)) {
             return;
         }
-        if (!confirmDiscardUnsaved("opening another file")) {
-            return;
-        }
         const QString filePath = fileModel_->filePath(index);
         if (filePath.endsWith(".cpack", Qt::CaseInsensitive)) {
+            // Validate the file first, before asking to discard
             CpackFileHandler handler;
             if (!handler.load(filePath)) {
                 QMessageBox::critical(this, "Error",
                     "Failed to open file: " + handler.errorString());
+                return;
+            }
+            if (!confirmDiscardUnsaved("opening another file")) {
                 return;
             }
             loadCpackFromHandler(handler, filePath, true);
@@ -1085,6 +1021,11 @@ void MainWindow::setupMenuBar() {
     cornerLayout->setContentsMargins(0, 0, 8, 0);
     cornerLayout->setSpacing(6);
 
+    editorFileLabel_ = new QLabel("solution.cpp", menuCorner);
+    editorFileLabel_->setObjectName("EditorFileLabel");
+    cornerLayout->addWidget(editorFileLabel_);
+    cornerLayout->addSpacing(8);
+
     auto *runAllButton = new QPushButton(menuCorner);
     runAllButton->setObjectName("MenuRunAllButton");
     runAllButton->setToolTip("Run all test cases");
@@ -1097,21 +1038,6 @@ void MainWindow::setupMenuBar() {
     runAllButton->setFocusPolicy(Qt::NoFocus);
     cornerLayout->addWidget(runAllButton);
     menuRunAllButton_ = runAllButton;
-
-    auto *templateButton = new QPushButton(menuCorner);
-    templateButton->setObjectName("MenuTemplateButton");
-    templateButton->setToolTip("Toggle template view");
-    templateButton->setIcon(
-        IconUtils::makeTintedIcon(":/images/template.svg",
-                                  themeManager_.textColor(),
-                                  QSize(16, 16)));
-    templateButton->setIconSize(QSize(16, 16));
-    templateButton->setFixedSize(28, 24);
-    templateButton->setFocusPolicy(Qt::NoFocus);
-    templateButton->setCheckable(true);
-    cornerLayout->addWidget(templateButton);
-    menuTemplateButton_ = templateButton;
-    syncTemplateToggleUi();
 
     auto *copySolutionButton = new QPushButton(menuCorner);
     copySolutionButton->setObjectName("MenuCopyButton");
@@ -1154,21 +1080,6 @@ void MainWindow::setupMenuBar() {
         runAllTests();
     };
     connect(runAllButton, &QPushButton::clicked, this, runAllFromMenu);
-    auto toggleTemplateView = [this]() {
-        transcludeTemplateEnabled_ = !transcludeTemplateEnabled_;
-        applyRuntimeSettings();
-        updateTemplateAvailability();
-        if (transcludeTemplateEnabled_) {
-            setEditorMode(EditorMode::Template);
-        } else {
-            setEditorMode(EditorMode::Solution);
-        }
-        showBottomToast(transcludeTemplateEnabled_
-                            ? "Template unhidden."
-                            : "Template hidden.");
-    };
-
-    connect(templateButton, &QPushButton::clicked, this, toggleTemplateView);
 
     auto *runAllShortcut =
         new QShortcut(QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_R), this);
@@ -1567,19 +1478,25 @@ void MainWindow::setDirty(bool dirty) {
 }
 
 void MainWindow::updateWindowTitle() {
+    // Determine file extension from current language
+    const QString lang = CompilationUtils::normalizeLanguage(currentLanguage_);
+    const QString ext = (lang == "Python") ? "py"
+                      : (lang == "Java")   ? "java"
+                                           : "cpp";
+
     QString modeLabel;
     switch (editorMode_) {
     case EditorMode::Solution:
-        modeLabel = "solution.cpp";
+        modeLabel = QString("solution.%1").arg(ext);
         break;
     case EditorMode::Brute:
-        modeLabel = "brute.cpp";
+        modeLabel = QString("brute.%1").arg(ext);
         break;
     case EditorMode::Generator:
-        modeLabel = "generator.cpp";
+        modeLabel = QString("generator.%1").arg(ext);
         break;
     case EditorMode::Template:
-        modeLabel = "template.cpp";
+        modeLabel = QString("template.%1").arg(ext);
         break;
     case EditorMode::Problem:
         modeLabel = "problem.json";
@@ -1588,7 +1505,15 @@ void MainWindow::updateWindowTitle() {
         modeLabel = "testcases.json";
         break;
     }
-    const QString editLabel = hasSavedFile_ ? modeLabel : "Untitled";
+    if (editorFileLabel_) {
+        editorFileLabel_->setText(modeLabel);
+    }
+    QString editLabel;
+    if (hasSavedFile_ && !currentFilePath_.isEmpty()) {
+        editLabel = QFileInfo(currentFilePath_).completeBaseName();
+    } else {
+        editLabel = "Untitled";
+    }
     const QString dirtyPrefix = isDirty_ ? "* " : "";
     setWindowTitle(QString("%1%2 - %3").arg(dirtyPrefix, editLabel, baseWindowTitle_));
 }
@@ -1623,14 +1548,14 @@ void MainWindow::setupAutosave() {
 }
 
 void MainWindow::scheduleAutosave() {
-    if (!autosaveTimer_ || !hasSavedFile_) {
+    if (!autosaveTimer_) {
         return;
     }
     autosaveTimer_->start(std::max(1000, autosaveIntervalMs_));
 }
 
 void MainWindow::performAutosave() {
-    if (!isDirty_ || !hasSavedFile_) {
+    if (!isDirty_) {
         return;
     }
 
@@ -1743,7 +1668,9 @@ void MainWindow::loadCpackFromHandler(const CpackFileHandler &handler,
     if (handler.hasFile("template.cpp")) {
         currentTemplate_ = QString::fromUtf8(handler.getFile("template.cpp"));
     } else {
-        currentTemplate_ = loadDefaultTemplate();
+        currentTemplate_ = defaultTemplates_.value(
+            CompilationUtils::normalizeLanguage(currentLanguage_),
+            QString{CompilationUtils::kDefaultTemplateCode});
     }
 
     problemEdited_ = false;
@@ -1924,7 +1851,6 @@ void MainWindow::setEditorMode(EditorMode mode) {
             }
             DirtyScope guard(this);
             codeEditor_->setText(next);
-            updateTemplateMarkerVisibility();
         }
     }
     updateEditorModeButtons();
@@ -1936,86 +1862,31 @@ void MainWindow::onSidePanelCollapsedChanged(bool collapsed) {
         sidebarToggle_->setChecked(!collapsed);
     }
     updateActivityBarActiveStates(collapsed);
-
-    // Re-hide template markers after the layout settles — QScintilla can
-    // reveal hidden lines when its viewport is resized by the splitter.
-    if (transcludeTemplateEnabled_ && editorMode_ == EditorMode::Template) {
-        QTimer::singleShot(0, this, &MainWindow::updateTemplateMarkerVisibility);
-    }
 }
 
 void MainWindow::updateActivityBarActiveStates(bool collapsed) {
-    if (collapsed) {
-        if (sidebarToggle_) {
-            sidebarToggle_->setActiveState(false);
-        }
-        if (newFileButton_) {
-            newFileButton_->setActiveState(false);
-        }
-        if (stressTestButton_) {
-            stressTestButton_->setActiveState(false);
-        }
-        if (templateButton_) {
-            templateButton_->setActiveState(false);
-        }
-        return;
-    }
-    if (sideStack_ && sideStack_->currentWidget() == fileExplorer_) {
-        if (newFileButton_) {
-            newFileButton_->setActiveState(true);
-        }
-        if (sidebarToggle_) {
-            sidebarToggle_->setActiveState(false);
-        }
-        if (stressTestButton_) {
-            stressTestButton_->setActiveState(false);
-        }
-        if (templateButton_) {
-            templateButton_->setActiveState(false);
-        }
-        return;
-    }
-    if (sideStack_ && sideStack_->currentWidget() == stressTestPanel_) {
-        if (stressTestButton_) {
-            stressTestButton_->setActiveState(true);
-        }
-        if (sidebarToggle_) {
-            sidebarToggle_->setActiveState(false);
-        }
-        if (newFileButton_) {
-            newFileButton_->setActiveState(false);
-        }
-        if (templateButton_) {
-            templateButton_->setActiveState(false);
-        }
-        return;
-    }
-    if (sideStack_ && sideStack_->currentWidget() == cpackPanel_) {
-        if (templateButton_) {
-            templateButton_->setActiveState(true);
-        }
-        if (sidebarToggle_) {
-            sidebarToggle_->setActiveState(false);
-        }
-        if (newFileButton_) {
-            newFileButton_->setActiveState(false);
-        }
-        if (stressTestButton_) {
-            stressTestButton_->setActiveState(false);
-        }
-        return;
-    }
-    if (sidebarToggle_) {
-        sidebarToggle_->setActiveState(true);
-    }
-    if (newFileButton_) {
-        newFileButton_->setActiveState(false);
-    }
-    if (stressTestButton_) {
-        stressTestButton_->setActiveState(false);
-    }
-    if (templateButton_) {
-        templateButton_->setActiveState(false);
+    // Map each button to its associated side-panel widget (nullptr = test panel / default)
+    const std::initializer_list<std::pair<ActivityBarButton *, QWidget *>> mapping = {
+        {sidebarToggle_,    nullptr},           // test panel (default)
+        {newFileButton_,    fileExplorer_},
+        {stressTestButton_, stressTestPanel_},
+        {templateButton_,   cpackPanel_},
+    };
+
+    QWidget *currentPanel = (!collapsed && sideStack_) ? sideStack_->currentWidget() : nullptr;
+
+    for (auto &[button, panel] : mapping) {
+        if (!button) continue;
+        // A button is active when not collapsed and its panel is showing.
+        // sidebarToggle_ (panel==nullptr) is active when the test panel is showing
+        // (i.e. none of the other panels matched).
+        const bool active = !collapsed &&
+            (panel ? (currentPanel == panel)
+                   : (currentPanel != nullptr &&
+                      currentPanel != fileExplorer_ &&
+                      currentPanel != stressTestPanel_ &&
+                      currentPanel != cpackPanel_));
+        button->setActiveState(active);
     }
 }
 
@@ -2029,69 +1900,12 @@ void MainWindow::updateTemplateAvailability() {
     if (!transcludeTemplateEnabled_ && editorMode_ == EditorMode::Template) {
         setEditorMode(EditorMode::Solution);
     }
-    updateTemplateMarkerVisibility();
-    syncTemplateToggleUi();
-}
 
-void MainWindow::updateTemplateMarkerVisibility() {
-    if (!codeEditor_) {
-        return;
-    }
-
-    const int lineCount = codeEditor_->lines();
-    if (lineCount <= 0) {
-        return;
-    }
-
-    codeEditor_->SendScintilla(QsciScintilla::SCI_SHOWLINES, 0, lineCount - 1);
-
-    if (!transcludeTemplateEnabled_ || editorMode_ != EditorMode::Template) {
-        return;
-    }
-
-    const QString text = codeEditor_->text();
-    if (!text.contains(kTemplateMarker)) {
-        return;
-    }
-
-    const QStringList lines = text.split('\n', Qt::KeepEmptyParts);
-    const int maxLine = std::min(lineCount, static_cast<int>(lines.size())) - 1;
-    if (maxLine < 0) {
-        return;
-    }
-
-    int hideStart = -1;
-    for (int i = 0; i <= maxLine; ++i) {
-        const bool hasMarker = lines[i].contains(kTemplateMarker);
-        if (hasMarker) {
-            if (hideStart == -1) {
-                hideStart = i;
-            }
-        } else if (hideStart != -1) {
-            codeEditor_->SendScintilla(QsciScintilla::SCI_HIDELINES, hideStart, i - 1);
-            hideStart = -1;
-        }
-    }
-    if (hideStart != -1) {
-        codeEditor_->SendScintilla(QsciScintilla::SCI_HIDELINES, hideStart, maxLine);
-    }
-}
-
-void MainWindow::syncTemplateToggleUi() {
-    const QString menuTip = transcludeTemplateEnabled_
-        ? "Hide template view"
-        : "Show template view";
-    const QString barTip = transcludeTemplateEnabled_
-        ? "Hide template"
-        : "Show template";
-
-    if (menuTemplateButton_) {
-        menuTemplateButton_->setCheckable(true);
-        menuTemplateButton_->setChecked(transcludeTemplateEnabled_);
-        menuTemplateButton_->setToolTip(menuTip);
-    }
+    // Update template button tooltip
     if (templateButton_) {
-        templateButton_->setToolTip(barTip);
+        templateButton_->setToolTip(transcludeTemplateEnabled_
+            ? "Hide template"
+            : "Show template");
     }
 }
 
@@ -2158,7 +1972,6 @@ void MainWindow::addTestCase() {
 
             // Set template for transclusion before running
             applyRuntimeSettings();
-            executionController_->setTemplate(currentTemplate_);
             executionController_->setTimeoutMs(currentTimeout_ * 1000);
             executionController_->runWithBindings(makeBindings(caseWidgets));
         });
@@ -2233,7 +2046,6 @@ void MainWindow::runNextSequentialTest() {
         }
 
         applyRuntimeSettings();
-        executionController_->setTemplate(currentTemplate_);
         executionController_->setTimeoutMs(currentTimeout_ * 1000);
         executionController_->runWithBindings(makeBindings(widgets));
         return;
@@ -2255,7 +2067,9 @@ void MainWindow::applyCompileErrorToAllCases(const QString &error) {
     for (auto &widgets : caseWidgets_) {
         if (widgets.statusLabel) {
             widgets.statusLabel->setText("CE");
-            widgets.statusLabel->setStyleSheet("color: #c42b1c; font-weight: 700;");
+            widgets.statusLabel->setStyleSheet(
+                QString("color: %1; font-weight: 700;")
+                    .arg(themeManager_.colors().statusError.name()));
         }
 
         if (widgets.outputViewer) {
@@ -2313,7 +2127,7 @@ void MainWindow::runStressTest() {
          generator.trimmed().isEmpty())) {
         if (stressStatusLabel_) {
             stressStatusLabel_->setText("Missing code");
-            stressStatusLabel_->setStyleSheet("color: #c42b1c; font-weight: 700;");
+            stressStatusLabel_->setStyleSheet(QString("color: %1; font-weight: 700;").arg(themeManager_.colors().statusError.name()));
         }
         if (stressComplexityLabel_) {
             stressComplexityLabel_->setText("Suspected: insufficient timing data");
@@ -2348,7 +2162,7 @@ void MainWindow::runStressTest() {
             if (!result.error.isEmpty()) {
                 if (stressStatusLabel_) {
                     stressStatusLabel_->setText("Error");
-                    stressStatusLabel_->setStyleSheet("color: #c42b1c; font-weight: 700;");
+                    stressStatusLabel_->setStyleSheet(QString("color: %1; font-weight: 700;").arg(themeManager_.colors().statusError.name()));
                 }
                 if (stressLog_) {
                     stressLog_->setPlainText(result.error);
@@ -2359,7 +2173,7 @@ void MainWindow::runStressTest() {
             if (result.passed) {
                 if (stressStatusLabel_) {
                     stressStatusLabel_->setText("Passed");
-                    stressStatusLabel_->setStyleSheet("color: #2e7d32; font-weight: 700;");
+                    stressStatusLabel_->setStyleSheet(QString("color: %1; font-weight: 700;").arg(themeManager_.colors().statusAc.name()));
                 }
                 if (stressComplexityLabel_) {
                     if (!result.complexity.isEmpty()) {
@@ -2379,7 +2193,7 @@ void MainWindow::runStressTest() {
 
             if (stressStatusLabel_) {
                 stressStatusLabel_->setText("Wrong Answer");
-                stressStatusLabel_->setStyleSheet("color: #c42b1c; font-weight: 700;");
+                stressStatusLabel_->setStyleSheet(QString("color: %1; font-weight: 700;").arg(themeManager_.colors().statusError.name()));
             }
             if (stressLog_) {
                 QString details;
@@ -2420,8 +2234,8 @@ void MainWindow::runStressTest() {
     const QString bruteCopy = brute;
     const QString generatorCopy = generator;
     const QString tmplCopy = tmpl;
-    const QString compilerPathCopy = cppCompilerPath_;
-    const QString compilerFlagsCopy = cppCompilerFlags_;
+    const QString compilerPathCopy = compilationConfig_.cppCompilerPath;
+    const QString compilerFlagsCopy = compilationConfig_.cppCompilerFlags;
 
     const bool useParallel = multithreadingEnabled_;
     stressWatcher_->setFuture(QtConcurrent::run([this, count, solutionCopy, bruteCopy, generatorCopy, tmplCopy, compilerPathCopy, compilerFlagsCopy, timeoutMs, useParallel]() {
@@ -2657,7 +2471,7 @@ MainWindow::StressResult MainWindow::runStressTestWorker(int count,
                 solutionTimes.push_back(0.0);
             }
 
-            if (normalizeText(bruteOut) != normalizeText(solutionOut)) {
+            if (CompilationUtils::normalizeText(bruteOut) != CompilationUtils::normalizeText(solutionOut)) {
                 result.passed = false;
                 result.failedIndex = i;
                 result.input = input;
@@ -2720,7 +2534,7 @@ MainWindow::StressResult MainWindow::runStressTestWorker(int count,
             }
 
             caseResult.solutionTime = solutionTime;
-            if (normalizeText(bruteOut) != normalizeText(solutionOut)) {
+            if (CompilationUtils::normalizeText(bruteOut) != CompilationUtils::normalizeText(solutionOut)) {
                 caseResult.passed = false;
                 caseResult.expected = bruteOut;
                 caseResult.actual = solutionOut;
@@ -2773,22 +2587,6 @@ MainWindow::StressResult MainWindow::runStressTestWorker(int count,
     result.passed = true;
     result.complexity = suspectedComplexityLabel(inputSizes, solutionTimes);
     return result;
-}
-
-QString MainWindow::normalizeText(const QString &text) const {
-    QString normalized = text;
-    normalized.replace("\r\n", "\n");
-    normalized.replace("\r", "\n");
-    QStringList lines = normalized.split('\n');
-    while (!lines.isEmpty() && lines.last().trimmed().isEmpty()) {
-        lines.removeLast();
-    }
-    for (QString &line : lines) {
-        while (line.endsWith(' ') || line.endsWith('\t')) {
-            line.chop(1);
-        }
-    }
-    return lines.join('\n');
 }
 
 void MainWindow::runAllTests() {
@@ -2846,7 +2644,6 @@ void MainWindow::runAllTests() {
         // Use parallel executor
         cancelSequentialRunAll();
         parallelExecutor_->setSourceCode(codeEditor_->text());
-        parallelExecutor_->setTemplate(currentTemplate_);
         parallelExecutor_->setTimeout(currentTimeout_ * 1000);
         parallelExecutor_->runAll(inputs);
     } else {
@@ -2924,16 +2721,16 @@ void MainWindow::applyParallelResult(const TestResult &result) {
             const bool isTle = result.error.contains("Time Limit Exceeded");
             if (isTle) {
                 widgets.statusLabel->setText("TLE" + timeSuffix);
-                widgets.statusLabel->setStyleSheet("color: #c42b1c; font-weight: 700;");
+                widgets.statusLabel->setStyleSheet(QString("color: %1; font-weight: 700;").arg(themeManager_.colors().statusError.name()));
             } else if (result.exitCode != 0 || !result.error.isEmpty()) {
                 widgets.statusLabel->setText("Runtime Error" + timeSuffix);
-                widgets.statusLabel->setStyleSheet("color: #c42b1c; font-weight: 700;");
+                widgets.statusLabel->setStyleSheet(QString("color: %1; font-weight: 700;").arg(themeManager_.colors().statusError.name()));
             } else if (result.passed) {
                 widgets.statusLabel->setText("AC" + timeSuffix);
-                widgets.statusLabel->setStyleSheet("color: #2e7d32; font-weight: 700;");
+                widgets.statusLabel->setStyleSheet(QString("color: %1; font-weight: 700;").arg(themeManager_.colors().statusAc.name()));
             } else {
                 widgets.statusLabel->setText("Wrong Answer" + timeSuffix);
-                widgets.statusLabel->setStyleSheet("color: #c42b1c; font-weight: 700;");
+                widgets.statusLabel->setStyleSheet(QString("color: %1; font-weight: 700;").arg(themeManager_.colors().statusError.name()));
             }
         }
 }
@@ -3025,7 +2822,6 @@ void MainWindow::applyUiZoom() {
         btn->setFixedSize(btnSz);
     };
     scaleMenuButton(menuRunAllButton_);
-    scaleMenuButton(menuTemplateButton_);
     // The copy button is found by object name
     if (auto *copyBtn = menuBar_ ? menuBar_->findChild<QPushButton *>("MenuCopyButton") : nullptr) {
         scaleMenuButton(copyBtn);
@@ -3068,14 +2864,13 @@ void MainWindow::applyUiZoom() {
     for (auto *edit : countEdits)
         edit->setFixedWidth(scalePx(48));
 
-    // Re-hide template markers — font/zoom changes can reset hidden lines.
-    updateTemplateMarkerVisibility();
 }
 
 void MainWindow::zoomIn() {
     if (uiScale_ < 1.8) {
         uiScale_ = std::min(uiScale_ + 0.1, 1.8);
         applyUiZoom();
+        QSettings("CF Dojo", "CF Dojo").setValue("uiScale", uiScale_);
     }
 }
 
@@ -3083,12 +2878,14 @@ void MainWindow::zoomOut() {
     if (uiScale_ > 0.7) {
         uiScale_ = std::max(uiScale_ - 0.1, 0.7);
         applyUiZoom();
+        QSettings("CF Dojo", "CF Dojo").setValue("uiScale", uiScale_);
     }
 }
 
 void MainWindow::resetZoom() {
     uiScale_ = 1.0;
     applyUiZoom();
+    QSettings("CF Dojo", "CF Dojo").setValue("uiScale", uiScale_);
 }
 
 void MainWindow::newFile() {
@@ -3137,10 +2934,10 @@ void MainWindow::newFile() {
         });
         connect(cancelBtn, &QPushButton::clicked, &picker, &QDialog::reject);
 
-        if (normalizeLanguageName(defaultLanguage_) == "Python") {
+        if (CompilationUtils::normalizeLanguage(defaultLanguage_) == "Python") {
             pythonBtn->setDefault(true);
             pythonBtn->setFocus();
-        } else if (normalizeLanguageName(defaultLanguage_) == "Java") {
+        } else if (CompilationUtils::normalizeLanguage(defaultLanguage_) == "Java") {
             javaBtn->setDefault(true);
             javaBtn->setFocus();
         } else {
@@ -3166,7 +2963,9 @@ void MainWindow::newFile() {
     currentSolutionCode_.clear();
     currentBruteCode_.clear();
     currentGeneratorCode_.clear();
-    currentTemplate_ = loadDefaultTemplate();
+    currentTemplate_ = defaultTemplates_.value(
+        CompilationUtils::normalizeLanguage(selectedLanguage),
+        QString{CompilationUtils::kDefaultTemplateCode});
     currentProblem_ = QJsonObject();
     currentProblemRaw_.clear();
     currentTestcasesRaw_.clear();
@@ -3185,9 +2984,7 @@ void MainWindow::newFile() {
 }
 
 void MainWindow::openFile() {
-    if (!confirmDiscardUnsaved("opening another file")) {
-        return;
-    }
+    // Select file first, before asking to discard unsaved work.
     const QString path = QFileDialog::getOpenFileName(
         this,
         "Open CPack File",
@@ -3199,12 +2996,19 @@ void MainWindow::openFile() {
         return;
     }
     
+    // Validate the file can be loaded before discarding current work.
     CpackFileHandler handler;
     if (!handler.load(path)) {
         QMessageBox::critical(this, "Error", 
             "Failed to open file: " + handler.errorString());
         return;
     }
+
+    // Only now ask the user to discard unsaved work — the new file is known-good.
+    if (!confirmDiscardUnsaved("opening another file")) {
+        return;
+    }
+
     loadCpackFromHandler(handler, path, true);
 }
 
@@ -3357,7 +3161,9 @@ void MainWindow::onProblemReceived(const QJsonObject &problem) {
     currentGeneratorCode_.clear();
     editorMode_ = EditorMode::Solution;
     updateEditorModeButtons();
-    currentTemplate_ = loadDefaultTemplate();
+    currentTemplate_ = defaultTemplates_.value(
+        CompilationUtils::normalizeLanguage(currentLanguage_),
+        QString{CompilationUtils::kDefaultTemplateCode});
     currentTestcasesRaw_.clear();
     testcasesEdited_ = false;
     currentTimeout_ = 5;

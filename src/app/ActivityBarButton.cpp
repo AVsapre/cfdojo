@@ -61,11 +61,22 @@ void ActivityBarButton::setScale(double scale) {
 }
 
 void ActivityBarButton::updateIcon() {
+    if (iconPath_.isEmpty()) {
+        return;
+    }
+
     const int targetIconSize = static_cast<int>(std::round(kActivityIconSize * scale_));
+    if (targetIconSize <= 0) {
+        return;
+    }
+
     const qreal dpr = devicePixelRatioF();
 
     const QSize pixmapSize(static_cast<int>(targetIconSize * dpr),
                            static_cast<int>(targetIconSize * dpr));
+    if (pixmapSize.isEmpty()) {
+        return;
+    }
 
     QPixmap basePixmap = QIcon(iconPath_).pixmap(pixmapSize);
     if (basePixmap.isNull()) {

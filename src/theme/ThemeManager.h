@@ -24,6 +24,10 @@ struct ThemeColors {
     QColor regex{"#D16969"};
     QColor escape{"#D7BA7D"};
     QColor docKeyword{"#C586C0"};
+    
+    // Status colors
+    QColor statusAc{"#2e7d32"};
+    QColor statusError{"#c42b1c"};
 };
 
 class ThemeManager {

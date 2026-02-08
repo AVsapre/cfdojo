@@ -103,26 +103,42 @@ QString ThemeManager::generateZoomOverrides(double scale) const {
     return QString(
         "\n/* Zoom overrides */\n"
         "QWidget { font-size: %1px; }\n"
-        "QWidget#DockContent QLabel { font-size: %2px; }\n"
-        "QWidget#DockContent QPushButton { font-size: %3px; padding: %4px %5px; }\n"
-        "QTextEdit, QPlainTextEdit { font-size: %6px; }\n"
-        "QPushButton { padding: %7px %8px; }\n"
-        "QDockWidget::title { padding-left: %9px; padding-top: %10px; padding-bottom: %11px; }\n"
-        "QWidget#DockContent, QWidget#FileExplorer { padding-top: %12px; }\n"
-        "QTreeView#FileExplorerTree { font-size: %13px; }\n"
-        "QTreeView#FileExplorerTree::item { padding: %14px 0px; }\n")
-        .arg(scalePx(14, scale))
-        .arg(scalePx(12, scale))
-        .arg(scalePx(12, scale))
-        .arg(scalePx(6, scale))
-        .arg(scalePx(10, scale))
-        .arg(scalePx(14, scale))
-        .arg(scalePx(8, scale))
-        .arg(scalePx(12, scale))
-        .arg(scalePx(10, scale))
-        .arg(scalePx(5, scale))
-        .arg(scalePx(5, scale))
-        .arg(scalePx(6, scale))
-        .arg(scalePx(12, scale))
-        .arg(scalePx(2, scale));
+        "QLabel#EditorFileLabel { font-size: %2px; }\n"
+        "QWidget#DockContent QLabel { font-size: %3px; }\n"
+        "QWidget#DockContent QPushButton { font-size: %4px; padding: %5px %6px; }\n"
+        "QTextEdit, QPlainTextEdit { font-size: %7px; }\n"
+        "QLabel#EditorPlaceholder { font-size: %8px; }\n"
+        "QPushButton { padding: %9px %10px; }\n"
+        "QPushButton#RunAllButton { font-size: %11px; }\n"
+        "QPushButton#AddCaseButton { font-size: %12px; }\n"
+        "QDockWidget::title { padding-left: %13px; padding-top: %14px; padding-bottom: %15px; }\n"
+        "QWidget#DockContent, QWidget#FileExplorer { padding-top: %16px; }\n"
+        "QTreeView#FileExplorerTree { font-size: %17px; }\n"
+        "QTreeView#FileExplorerTree::item { padding: %18px 0px; }\n"
+        "QLabel#TestSummaryLabel { font-size: %19px; }\n"
+        "QLabel#StressComplexityLabel { font-size: %20px; }\n"
+        "QWidget#StressTestPanel QLabel { font-size: %21px; }\n"
+        "QWidget#StressTestPanel QPushButton { font-size: %22px; }\n")
+        .arg(scalePx(14, scale))   // 1  QWidget
+        .arg(scalePx(13, scale))   // 2  EditorFileLabel
+        .arg(scalePx(12, scale))   // 3  DockContent QLabel
+        .arg(scalePx(12, scale))   // 4  DockContent QPushButton font
+        .arg(scalePx(6, scale))    // 5  DockContent QPushButton padding-v
+        .arg(scalePx(10, scale))   // 6  DockContent QPushButton padding-h
+        .arg(scalePx(14, scale))   // 7  editors
+        .arg(scalePx(14, scale))   // 8  EditorPlaceholder
+        .arg(scalePx(8, scale))    // 9  QPushButton padding-v
+        .arg(scalePx(12, scale))   // 10 QPushButton padding-h
+        .arg(scalePx(18, scale))   // 11 RunAllButton
+        .arg(scalePx(18, scale))   // 12 AddCaseButton
+        .arg(scalePx(10, scale))   // 13 dock title padding-left
+        .arg(scalePx(5, scale))    // 14 dock title padding-top
+        .arg(scalePx(5, scale))    // 15 dock title padding-bottom
+        .arg(scalePx(6, scale))    // 16 DockContent/FileExplorer padding-top
+        .arg(scalePx(12, scale))   // 17 FileExplorerTree font
+        .arg(scalePx(2, scale))    // 18 FileExplorerTree item padding
+        .arg(scalePx(12, scale))   // 19 TestSummaryLabel
+        .arg(scalePx(12, scale))   // 20 StressComplexityLabel
+        .arg(scalePx(12, scale))   // 21 StressTestPanel QLabel
+        .arg(scalePx(12, scale));  // 22 StressTestPanel QPushButton
 }

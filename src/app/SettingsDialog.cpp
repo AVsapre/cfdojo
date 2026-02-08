@@ -11,6 +11,9 @@
 #include <QLineEdit>
 #include <QMessageBox>
 #include <QComboBox>
+#include "execution/CompilationUtils.h"
+
+#include <QPlainTextEdit>
 #include <QSpinBox>
 #include <QCloseEvent>
 #include <QFont>
@@ -111,25 +114,41 @@ QWidget* SettingsDialog::createTemplateTab() {
     auto *layout = new QVBoxLayout(widget);
     layout->setContentsMargins(12, 12, 12, 12);
 
-    auto *templateGroup = new QGroupBox("Template", widget);
-    auto *groupLayout = new QVBoxLayout(templateGroup);
-    groupLayout->setContentsMargins(12, 12, 12, 12);
-    groupLayout->setSpacing(8);
+    auto *transclusionGroup = new QGroupBox("Template Transclusion", widget);
+    auto *transclusionLayout = new QVBoxLayout(transclusionGroup);
 
     auto *note = new QLabel(
-        "Template view inserts your solution into template.cpp at the //#main marker.",
-        templateGroup);
+        "Template transclusion auto-inserts your solution at the //#main marker.",
+        transclusionGroup);
     note->setWordWrap(true);
-    groupLayout->addWidget(note);
+    transclusionLayout->addWidget(note);
 
     transcludeTemplateCheckbox_ =
-        new QCheckBox("Template view enabled by default", templateGroup);
+        new QCheckBox("Enable template transclusion", transclusionGroup);
     transcludeTemplateCheckbox_->setChecked(false);
     connect(transcludeTemplateCheckbox_, &QCheckBox::toggled,
             this, &SettingsDialog::settingsChanged);
-    groupLayout->addWidget(transcludeTemplateCheckbox_);
+    transclusionLayout->addWidget(transcludeTemplateCheckbox_);
 
-    layout->addWidget(templateGroup);
+    auto createTemplateGroup = [&](const QString &title) -> QPlainTextEdit * {
+        auto *group = new QGroupBox(title, widget);
+        auto *groupLayout = new QVBoxLayout(group);
+        auto *editor = new QPlainTextEdit(group);
+        editor->setPlaceholderText("//#main");
+        editor->setMinimumHeight(90);
+        editor->setFont(QFont("monospace", 10));
+        connect(editor, &QPlainTextEdit::textChanged,
+                this, &SettingsDialog::settingsChanged);
+        groupLayout->addWidget(editor);
+        layout->addWidget(group);
+        return editor;
+    };
+
+    layout->addWidget(transclusionGroup);
+    cppTemplateEdit_ = createTemplateGroup("C++");
+    pythonTemplateEdit_ = createTemplateGroup("Python");
+    javaTemplateEdit_ = createTemplateGroup("Java");
+
     layout->addStretch();
 
     return widget;
@@ -264,12 +283,25 @@ QWidget* SettingsDialog::createAboutTab() {
 }
 
 
-void SettingsDialog::setTemplate(const QString &tmpl) {
-    templateText_ = tmpl;
+void SettingsDialog::setTemplateForLanguage(const QString &language, const QString &tmpl) {
+    if (auto *editor = editorForLanguage(language)) {
+        QSignalBlocker blocker(editor);
+        editor->setPlainText(tmpl);
+    }
 }
 
-QString SettingsDialog::getTemplate() const {
-    return templateText_.isEmpty() ? QString("//#main") : templateText_;
+QString SettingsDialog::getTemplateForLanguage(const QString &language) const {
+    if (const auto *editor = editorForLanguage(language)) {
+        const QString text = editor->toPlainText();
+        if (!text.isEmpty()) return text;
+    }
+    return QString{CompilationUtils::kDefaultTemplateCode};
+}
+
+QPlainTextEdit *SettingsDialog::editorForLanguage(const QString &language) const {
+    if (language == QLatin1String("Python")) return pythonTemplateEdit_;
+    if (language == QLatin1String("Java"))   return javaTemplateEdit_;
+    return cppTemplateEdit_;
 }
 
 void SettingsDialog::setTranscludeTemplateEnabled(bool enabled) {

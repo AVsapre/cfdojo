@@ -70,6 +70,16 @@ void CompanionListener::onNewConnection() {
                 this, &CompanionListener::onDisconnected);
         
         buffers_[socket] = QByteArray();
+        
+        // Set a timeout so misbehaving clients don't hang forever
+        QTimer *timeout = new QTimer(socket);
+        timeout->setSingleShot(true);
+        connect(timeout, &QTimer::timeout, this, [this, socket]() {
+            buffers_.remove(socket);
+            socket->abort();
+            socket->deleteLater();
+        });
+        timeout->start(kSocketTimeoutMs);
     }
 }
 
@@ -81,6 +91,14 @@ void CompanionListener::onReadyRead() {
     
     buffers_[socket].append(socket->readAll());
     
+    // Guard against unbounded memory growth
+    if (buffers_[socket].size() > kMaxBufferSize) {
+        buffers_.remove(socket);
+        socket->abort();
+        socket->deleteLater();
+        return;
+    }
+    
     // Check if we have a complete HTTP request
     QByteArray &buffer = buffers_[socket];
     
@@ -91,13 +109,34 @@ void CompanionListener::onReadyRead() {
     }
     
     // Parse Content-Length from headers
-    int contentLength = 0;
+    int contentLength = -1;
     QByteArray headers = buffer.left(headerEnd);
     int clPos = headers.toLower().indexOf("content-length:");
     if (clPos != -1) {
         int lineEnd = headers.indexOf("\r\n", clPos);
+        if (lineEnd == -1) {
+            lineEnd = headers.size();
+        }
         QByteArray clLine = headers.mid(clPos + 15, lineEnd - clPos - 15).trimmed();
-        contentLength = clLine.toInt();
+        bool ok = false;
+        contentLength = clLine.toInt(&ok);
+        if (!ok || contentLength < 0) {
+            contentLength = -1;
+        }
+    }
+    
+    // If no Content-Length header, we cannot know the body size — reject.
+    if (contentLength < 0) {
+        // Send an error response
+        QByteArray response = "HTTP/1.1 411 Length Required\r\n"
+                              "Content-Length: 0\r\n"
+                              "Connection: close\r\n"
+                              "\r\n";
+        socket->write(response);
+        socket->flush();
+        buffers_.remove(socket);
+        socket->disconnectFromHost();
+        return;
     }
     
     // Check if we have the complete body
@@ -106,8 +145,8 @@ void CompanionListener::onReadyRead() {
         return;  // Body not complete yet
     }
     
-    // Parse the request
-    parseRequest(socket, buffer);
+    // Parse the request — only use exactly contentLength bytes
+    parseRequest(socket, buffer.mid(0, bodyStart + contentLength));
     
     // Send HTTP response
     QByteArray response = "HTTP/1.1 200 OK\r\n"
@@ -131,13 +170,26 @@ void CompanionListener::onDisconnected() {
 
 void CompanionListener::parseRequest(QTcpSocket *socket, const QByteArray &data) {
     // Find body start (after \r\n\r\n)
-    int bodyStart = data.indexOf("\r\n\r\n");
-    if (bodyStart == -1) {
+    int headerEnd = data.indexOf("\r\n\r\n");
+    if (headerEnd == -1) {
         return;
     }
-    bodyStart += 4;
-    
-    QByteArray body = data.mid(bodyStart);
+
+    // Re-parse Content-Length to know exact body size
+    QByteArray headers = data.left(headerEnd);
+    int contentLength = 0;
+    int clPos = headers.toLower().indexOf("content-length:");
+    if (clPos != -1) {
+        int lineEnd = headers.indexOf("\r\n", clPos);
+        if (lineEnd == -1) {
+            lineEnd = headers.size();
+        }
+        QByteArray clLine = headers.mid(clPos + 15, lineEnd - clPos - 15).trimmed();
+        contentLength = clLine.toInt();
+    }
+
+    int bodyStart = headerEnd + 4;
+    QByteArray body = data.mid(bodyStart, contentLength);
     
     // Parse JSON
     QJsonParseError error;

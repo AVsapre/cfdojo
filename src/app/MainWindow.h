@@ -1,6 +1,7 @@
 #pragma once
 
 #include "editor/EditorConfigurator.h"
+#include "execution/CompilationConfig.h"
 #include "execution/ExecutionController.h"
 #include "execution/ParallelExecutor.h"
 #include "ui/TestPanelBuilder.h"
@@ -8,6 +9,7 @@
 
 #include <QMainWindow>
 #include <QFont>
+#include <QMap>
 #include <QPointer>
 #include <QString>
 #include <QJsonObject>
@@ -112,7 +114,6 @@ private:
                                      const QString &compilerFlags,
                                      int timeoutMs,
                                      bool parallel) const;
-    QString normalizeText(const QString &text) const;
     void updateTestSummary(const QString &text);
     void applyParallelResult(const TestResult &result);
 
@@ -147,8 +148,6 @@ private:
     QString buildTestcasesJson() const;
     void updateActivityBarActiveStates(bool collapsed);
     void updateTemplateAvailability();
-    void updateTemplateMarkerVisibility();
-    void syncTemplateToggleUi();
     void loadRuntimeSettings();
     void applyRuntimeSettings();
     void applyFileExplorerRootDirectory(const QString &path);
@@ -171,9 +170,8 @@ private:
     ActivityBarButton *stressTestButton_ = nullptr;
     ActivityBarButton *templateButton_ = nullptr;
     ActivityBarButton *newFileButton_ = nullptr;
-    ActivityBarButton *settingsButton_ = nullptr;
+    QPointer<ActivityBarButton> settingsButton_;
     ActivityBarButton *backButton_ = nullptr;
-    QPushButton *menuTemplateButton_ = nullptr;
     QPushButton *menuRunAllButton_ = nullptr;
 
     // Editor area
@@ -198,6 +196,7 @@ private:
     QTreeView *fileTree_ = nullptr;
     QFileSystemModel *fileModel_ = nullptr;
     QsciScintilla *codeEditor_ = nullptr;
+    QLabel *editorFileLabel_ = nullptr;
     TestPanelBuilder::PanelWidgets testPanelWidgets_;
     std::vector<TestPanelBuilder::CaseWidgets> caseWidgets_;
 
@@ -234,7 +233,8 @@ private:
     QString currentTestcasesRaw_;
     bool problemEdited_ = false;
     bool testcasesEdited_ = false;
-    QString currentTemplate_ = "//#main";
+    QString currentTemplate_{CompilationUtils::kDefaultTemplateCode};
+    QMap<QString, QString> defaultTemplates_;
     int currentTimeout_ = 5;
     
     // Competitive Companion
@@ -251,13 +251,7 @@ private:
     int autosaveIntervalMs_ = 15000;
     QString defaultLanguage_ = "C++";
     QString currentLanguage_ = "C++";
-    QString cppCompilerPath_ = "g++";
-    QString cppCompilerFlags_ = "-O2 -std=c++17";
-    QString pythonPath_ = "python3";
-    QString pythonArgs_;
-    QString javaCompilerPath_ = "javac";
-    QString javaRunPath_ = "java";
-    QString javaArgs_;
+    CompilationConfig compilationConfig_;
     QString fileExplorerRootDir_;
 
     // Dirty state

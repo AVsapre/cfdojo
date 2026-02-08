@@ -32,10 +32,10 @@ add_executable(CFDojo
     src/app/SettingsDialog.h
     src/editor/EditorConfigurator.cpp
     src/editor/EditorConfigurator.h
-    src/editor/EditorPlaceholder.cpp
-    src/editor/EditorPlaceholder.h
     src/editor/DojoCppLexer.cpp
     src/editor/DojoCppLexer.h
+    src/execution/CompilationConfig.h
+    src/execution/CompilationUtils.h
     src/execution/ExecutionController.cpp
     src/execution/ExecutionController.h
     src/execution/ParallelExecutor.cpp

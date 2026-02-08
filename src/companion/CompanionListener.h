@@ -25,6 +25,10 @@ public:
         27121  // Competitive Programming Helper
     };
     static constexpr int kDefaultPortsCount = 7;
+    
+    // Safety limits
+    static constexpr qint64 kMaxBufferSize = 4 * 1024 * 1024;  // 4 MB
+    static constexpr int kSocketTimeoutMs = 10000;              // 10 seconds
 
     explicit CompanionListener(QObject *parent = nullptr);
     ~CompanionListener();

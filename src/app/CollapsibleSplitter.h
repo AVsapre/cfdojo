@@ -23,7 +23,6 @@ signals:
     void collapsedChanged(bool collapsed);
 
 protected:
-    void resizeEvent(QResizeEvent *event) override;
 
 private slots:
     void onSplitterMoved(int pos, int index);

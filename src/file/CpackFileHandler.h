@@ -44,51 +44,6 @@ public:
     QString errorString() const { return errorString_; }
 
 private:
-    struct LocalFileHeader {
-        quint32 signature;
-        quint16 versionNeeded;
-        quint16 flags;
-        quint16 compression;
-        quint16 modTime;
-        quint16 modDate;
-        quint32 crc32;
-        quint32 compressedSize;
-        quint32 uncompressedSize;
-        quint16 fileNameLength;
-        quint16 extraFieldLength;
-    };
-
-    struct CentralDirHeader {
-        quint32 signature;
-        quint16 versionMade;
-        quint16 versionNeeded;
-        quint16 flags;
-        quint16 compression;
-        quint16 modTime;
-        quint16 modDate;
-        quint32 crc32;
-        quint32 compressedSize;
-        quint32 uncompressedSize;
-        quint16 fileNameLength;
-        quint16 extraFieldLength;
-        quint16 commentLength;
-        quint16 diskStart;
-        quint16 internalAttr;
-        quint32 externalAttr;
-        quint32 localHeaderOffset;
-    };
-
-    struct EndOfCentralDir {
-        quint32 signature;
-        quint16 diskNumber;
-        quint16 diskWithCentralDir;
-        quint16 entriesOnDisk;
-        quint16 totalEntries;
-        quint32 centralDirSize;
-        quint32 centralDirOffset;
-        quint16 commentLength;
-    };
-
     static constexpr int kManifestVersion = 1;
     static constexpr const char *kManifestFile = "manifest.json";
     

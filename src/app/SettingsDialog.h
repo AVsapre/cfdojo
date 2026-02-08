@@ -8,6 +8,7 @@ class QComboBox;
 class QTabWidget;
 class QLineEdit;
 class QSpinBox;
+class QPlainTextEdit;
 
 class SettingsDialog : public QWidget {
     Q_OBJECT
@@ -15,9 +16,9 @@ class SettingsDialog : public QWidget {
 public:
     explicit SettingsDialog(QWidget *parent = nullptr);
 
-    // Template settings
-    void setTemplate(const QString &tmpl);
-    QString getTemplate() const;
+    // Template settings (per-language)
+    void setTemplateForLanguage(const QString &language, const QString &tmpl);
+    QString getTemplateForLanguage(const QString &language) const;
     void setTranscludeTemplateEnabled(bool enabled);
     bool isTranscludeTemplateEnabled() const;
 
@@ -80,8 +81,11 @@ private:
     QSpinBox *autosaveIntervalSpin_ = nullptr;
     
     // Template tab
+    QPlainTextEdit *editorForLanguage(const QString &language) const;
     QCheckBox *transcludeTemplateCheckbox_ = nullptr;
-    QString templateText_;
+    QPlainTextEdit *cppTemplateEdit_ = nullptr;
+    QPlainTextEdit *pythonTemplateEdit_ = nullptr;
+    QPlainTextEdit *javaTemplateEdit_ = nullptr;
     
     // Languages tab
     QComboBox *defaultLanguageCombo_ = nullptr;

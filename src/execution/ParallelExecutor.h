@@ -1,5 +1,7 @@
 #pragma once
 
+#include "execution/CompilationConfig.h"
+
 #include <QObject>
 #include <QFuture>
 #include <QFutureWatcher>
@@ -35,20 +37,13 @@ public:
     explicit ParallelExecutor(QObject *parent = nullptr);
     ~ParallelExecutor();
 
-    // Set the source code and template
+    // Set the source code
     void setSourceCode(const QString &code);
-    void setTemplate(const QString &tmpl);
-    
-    // Set compiler settings
-    void setCompilerPath(const QString &path) { compilerPath_ = path; }
-    void setCompilerFlags(const QString &flags) { compilerFlags_ = flags; }
-    void setLanguage(const QString &language) { language_ = language; }
-    void setPythonPath(const QString &path) { pythonPath_ = path; }
-    void setPythonArgs(const QString &args) { pythonArgs_ = args; }
-    void setJavaCompilerPath(const QString &path) { javaCompilerPath_ = path; }
-    void setJavaRunPath(const QString &path) { javaRunPath_ = path; }
-    void setJavaArgs(const QString &args) { javaArgs_ = args; }
-    void setTranscludeTemplateEnabled(bool enabled) { transcludeTemplate_ = enabled; }
+
+    // Set all compilation settings at once
+    void setConfig(const CompilationConfig &cfg) { config_ = cfg; }
+    const CompilationConfig &config() const { return config_; }
+
     void setTimeout(int ms) { timeoutMs_ = ms; }
 
     // Run all tests in parallel (compiles once, then runs tests concurrently)
@@ -63,31 +58,20 @@ public:
 signals:
     void compilationStarted();
     void compilationFinished(bool success, const QString &error);
-    void testStarted(int testIndex);
     void testFinished(const TestResult &result);
     void allTestsFinished(const std::vector<TestResult> &results);
 
 private:
-    QString applyTransclusion(const QString &solution) const;
     bool compile();
-    TestResult runSingleTest(const TestInput &test);
-    QString normalizeText(const QString &text) const;
-    QString normalizedLanguage() const;
-    QString detectJavaMainClass(const QString &code) const;
-    QStringList splitArgs(const QString &args) const;
+    TestResult runSingleTest(const TestInput &test,
+                             const QString &program,
+                             const QStringList &args,
+                             const QString &workDir,
+                             int timeoutMs);
 
+    CompilationConfig config_;
     QString sourceCode_;
-    QString template_ = "//#main";
-    QString compilerPath_ = "g++";
-    QString compilerFlags_ = "-O2 -std=c++17";
-    QString language_ = "C++";
-    QString pythonPath_ = "python3";
-    QString pythonArgs_;
-    QString javaCompilerPath_ = "javac";
-    QString javaRunPath_ = "java";
-    QString javaArgs_;
     int timeoutMs_ = 5000;
-    bool transcludeTemplate_ = false;
     
     std::unique_ptr<QTemporaryDir> tempDir_;
     QString executablePath_;

@@ -12,6 +12,13 @@ QWidget {
     font-size: 14px;
 }
 
+/* EDITOR FILE TAB */
+QLabel#EditorFileLabel {
+    color: @textcolor@;
+    font-size: 13px;
+    padding: 0px 4px;
+}
+
 /* ACTIVITY BAR */
 QWidget#ActivityBar {
     background-color: @background@;
@@ -92,8 +99,8 @@ QPushButton#NewFileButton:checked {
 
 /* DOCK WIDGETS (The Sidebars) */
 QDockWidget {
-    titlebar-close-icon: url(close.png);
-    titlebar-normal-icon: url(undock.png);
+    titlebar-close-icon: url(:/close.png);
+    titlebar-normal-icon: url(:/undock.png);
 }
 QDockWidget::title {
     background: @background@;
@@ -202,7 +209,7 @@ QTreeView#CpackTree:focus {
 }
 
 QSplitter::handle {
-    background-color: @background@;
+    background-color: @edgecolor@;
 }
 
 /* TRAINER WINDOW */
@@ -246,7 +253,7 @@ QPlainTextEdit {
 }
 
 QPlainTextEdit:focus {
-    border: 1px solid @edgecolor@;
+    border: 1px solid @textcolor@;
 }
 
 QPlainTextEdit#InputBox,
@@ -311,21 +318,21 @@ QPushButton#RunButton {
 }
 QPushButton#RunButton[stop="true"] {
     background-color: @yellowbutton@;
-    color: @textcolor@;
+    color: #1e1e1e;
 }
 QPushButton#RunButton:hover {
     background-color: @greenbuttonHover@;
 }
 QPushButton#RunButton[stop="true"]:hover {
     background-color: @yellowbuttonHover@;
-    color: @textcolor@;
+    color: #1e1e1e;
 }
 QPushButton#RunButton:pressed {
     background-color: @greenbuttonPressed@;
 }
 QPushButton#RunButton[stop="true"]:pressed {
     background-color: @yellowbuttonPressed@;
-    color: @textcolor@;
+    color: #1e1e1e;
 }
 
 QPushButton#DeleteButton {
@@ -489,9 +496,17 @@ QMenuBar::item:selected {
     background-color: @edgecolor@;
 }
 
+QToolButton#qt_menubar_ext_button {
+    width: 0px;
+    max-width: 0px;
+    padding: 0px;
+    margin: 0px;
+    border: none;
+    background: transparent;
+}
+
 QMenuBar QPushButton#MenuCopyButton,
-QMenuBar QPushButton#MenuRunAllButton,
-QMenuBar QPushButton#MenuTemplateButton {
+QMenuBar QPushButton#MenuRunAllButton {
     background-color: transparent;
     border: 1px solid transparent;
     border-bottom: 1px solid @edgecolor@;
@@ -499,20 +514,13 @@ QMenuBar QPushButton#MenuTemplateButton {
 }
 
 QMenuBar QPushButton#MenuCopyButton:hover,
-QMenuBar QPushButton#MenuRunAllButton:hover,
-QMenuBar QPushButton#MenuTemplateButton:hover {
-    background-color: @edgecolor@;
-    border-bottom: 1px solid @edgecolor@;
-}
-
-QMenuBar QPushButton#MenuTemplateButton:checked {
+QMenuBar QPushButton#MenuRunAllButton:hover {
     background-color: @edgecolor@;
     border-bottom: 1px solid @edgecolor@;
 }
 
 QMenuBar QPushButton#MenuCopyButton:pressed,
-QMenuBar QPushButton#MenuRunAllButton:pressed,
-QMenuBar QPushButton#MenuTemplateButton:pressed {
+QMenuBar QPushButton#MenuRunAllButton:pressed {
     background-color: @edgecolor@;
     border-bottom: 1px solid @edgecolor@;
 }
@@ -604,7 +612,7 @@ QLineEdit {
 }
 
 QLineEdit:focus {
-    border: 1px solid @edgecolor@;
+    border: 1px solid @textcolor@;
 }
 
 QSpinBox {
@@ -615,7 +623,7 @@ QSpinBox {
 }
 
 QSpinBox:focus {
-    border: 1px solid @edgecolor@;
+    border: 1px solid @textcolor@;
 }
 
 QSpinBox::up-button, QSpinBox::down-button {
@@ -636,4 +644,116 @@ QLabel#PanelSubtitle {
 QLabel#TestMetaLabel {
     color: @textcolor@;
     font-weight: 600;
+}
+
+/* COMBOBOX (#17) */
+QComboBox {
+    background-color: @background@;
+    color: @textcolor@;
+    border: 1px solid @edgecolor@;
+    padding: 6px 8px;
+}
+
+QComboBox:focus {
+    border: 1px solid @textcolor@;
+}
+
+QComboBox::drop-down {
+    border: none;
+    width: 20px;
+}
+
+QComboBox::down-arrow {
+    image: none;
+    border-left: 4px solid transparent;
+    border-right: 4px solid transparent;
+    border-top: 5px solid @textcolor@;
+    margin-right: 6px;
+}
+
+QComboBox QAbstractItemView {
+    background-color: @background@;
+    color: @textcolor@;
+    border: 1px solid @edgecolor@;
+    selection-background-color: @bgHover@;
+    selection-color: @textcolor@;
+    outline: none;
+}
+
+/* SCROLLBAR (#18) */
+QScrollBar:vertical {
+    background: @background@;
+    width: 9px;
+    margin: 0px;
+    border-right: 1px solid @edgecolor@;
+}
+
+QScrollBar::handle:vertical {
+    background: @edgecolor@;
+    min-height: 20px;
+    border-radius: 0px;
+}
+
+QScrollBar::handle:vertical:hover {
+    background: @edgecolor@;
+}
+
+QScrollBar::add-line:vertical,
+QScrollBar::sub-line:vertical {
+    height: 0px;
+}
+
+QScrollBar::add-page:vertical,
+QScrollBar::sub-page:vertical {
+    background: none;
+}
+
+QScrollBar:horizontal {
+    background: @background@;
+    height: 8px;
+    margin: 0px;
+}
+
+QScrollBar::handle:horizontal {
+    background: @edgecolor@;
+    min-width: 20px;
+    border-radius: 0px;
+}
+
+QScrollBar::handle:horizontal:hover {
+    background: @edgecolor@;
+}
+
+QScrollBar::add-line:horizontal,
+QScrollBar::sub-line:horizontal {
+    width: 0px;
+}
+
+QScrollBar::add-page:horizontal,
+QScrollBar::sub-page:horizontal {
+    background: none;
+}
+
+/* TOOLTIP (#19) */
+QToolTip {
+    background-color: @background@;
+    color: @textcolor@;
+    border: 1px solid @edgecolor@;
+    padding: 4px 6px;
+}
+
+/* DISABLED STATES (#21) */
+QPushButton:disabled {
+    background-color: @background@;
+    color: @edgecolor@;
+    border: 1px solid @background@;
+}
+
+QLineEdit:disabled,
+QSpinBox:disabled,
+QComboBox:disabled,
+QPlainTextEdit:disabled {
+    background-color: @background@;
+    color: @edgecolor@;
+    border: 1px solid @edgecolor@;
 }

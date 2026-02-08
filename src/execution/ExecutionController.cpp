@@ -1,4 +1,5 @@
 #include "execution/ExecutionController.h"
+#include "execution/CompilationUtils.h"
 
 #include <QDir>
 #include <QFile>
@@ -24,18 +25,34 @@ ExecutionController::ExecutionController(QObject *parent)
       compilerProcess_(new QProcess(this)),
       runProcess_(new QProcess(this)) {
 
+    // Create new process groups so we can kill entire trees
+#ifdef Q_OS_UNIX
+    compilerProcess_->setChildProcessModifier([]() { ::setsid(); });
+    runProcess_->setChildProcessModifier([]() { ::setsid(); });
+#endif
+
     timeoutTimer_ = new QTimer(this);
     timeoutTimer_->setSingleShot(true);
     connect(timeoutTimer_, &QTimer::timeout, this, [this]() {
         if (state_ != State::Running) {
             return;
         }
+        // Guard against the race: if the process already finished between the
+        // timeout firing and this slot executing, don't overwrite the result.
+        if (runProcess_->state() == QProcess::NotRunning) {
+            return;
+        }
         timedOut_ = true;
         stopRequested_ = false;
-        if (runProcess_->state() != QProcess::NotRunning) {
-            runProcess_->kill();
-            runProcess_->waitForFinished(1000);
+        // Kill the entire process group to avoid orphaned child forks
+#ifdef Q_OS_UNIX
+        const qint64 childPid = runProcess_->processId();
+        if (childPid > 0) {
+            ::kill(-static_cast<pid_t>(childPid), SIGKILL);
         }
+#endif
+        runProcess_->kill();
+        runProcess_->waitForFinished(1000);
         lastExecutionTimeMs_ = timeoutMs_;
         updateStatus("Time Limit Exceeded");
         if (ui_.errorViewer) {
@@ -110,10 +127,18 @@ void ExecutionController::stop() {
     }
 
     if (compilerProcess_->state() != QProcess::NotRunning) {
+#ifdef Q_OS_UNIX
+        const qint64 pid = compilerProcess_->processId();
+        if (pid > 0) ::kill(-static_cast<pid_t>(pid), SIGKILL);
+#endif
         compilerProcess_->kill();
         compilerProcess_->waitForFinished(1000);
     }
     if (runProcess_->state() != QProcess::NotRunning) {
+#ifdef Q_OS_UNIX
+        const qint64 pid = runProcess_->processId();
+        if (pid > 0) ::kill(-static_cast<pid_t>(pid), SIGKILL);
+#endif
         runProcess_->kill();
         runProcess_->waitForFinished(1000);
     }
@@ -161,42 +186,7 @@ void ExecutionController::setIconTintColor(const QColor &color) {
     updateRunButtonForState(state_);
 }
 
-QString ExecutionController::normalizedLanguage() const {
-    const QString normalized = language_.trimmed().toLower();
-    if (normalized == "python" || normalized == "py") {
-        return "Python";
-    }
-    if (normalized == "java") {
-        return "Java";
-    }
-    return "C++";
-}
 
-QStringList ExecutionController::splitArgs(const QString &args) const {
-    const QString trimmed = args.trimmed();
-    if (trimmed.isEmpty()) {
-        return {};
-    }
-    return QProcess::splitCommand(trimmed);
-}
-
-QString ExecutionController::detectJavaMainClass(const QString &code) const {
-    const QRegularExpression publicClassPattern(
-        "\\bpublic\\s+class\\s+([A-Za-z_][A-Za-z0-9_]*)\\b");
-    QRegularExpressionMatch match = publicClassPattern.match(code);
-    if (match.hasMatch()) {
-        return match.captured(1);
-    }
-
-    const QRegularExpression classPattern(
-        "\\bclass\\s+([A-Za-z_][A-Za-z0-9_]*)\\b");
-    match = classPattern.match(code);
-    if (match.hasMatch()) {
-        return match.captured(1);
-    }
-
-    return "Solution";
-}
 
 void ExecutionController::startCompilation() {
     setState(State::Compiling);
@@ -219,14 +209,15 @@ void ExecutionController::startCompilation() {
     }
 
     const QString solution = ui_.codeEditor ? ui_.codeEditor->text() : QString();
-    const QString code = applyTransclusion(solution);
-    const QString language = normalizedLanguage();
+    const QString code = CompilationUtils::applyTransclusion(
+        config_.templateCode, solution, config_.transcludeTemplate);
+    const QString language = CompilationUtils::normalizeLanguage(config_.language);
     const QString tempPath = tempDir_->path();
     const QString sourceExt = language == "Python" ? "py"
                            : language == "Java"   ? "java"
                                                    : "cpp";
     const QString sourceBaseName =
-        language == "Java" ? detectJavaMainClass(code) : "solution";
+        language == "Java" ? CompilationUtils::detectJavaMainClass(code) : "solution";
     const QString sourcePath =
         QDir(tempPath).filePath(QString("%1.%2").arg(sourceBaseName, sourceExt));
 #ifdef Q_OS_WIN
@@ -262,8 +253,8 @@ void ExecutionController::startCompilation() {
 #else
         const QString defaultPython = "python3";
 #endif
-        runProgram_ = pythonPath_.trimmed().isEmpty() ? defaultPython : pythonPath_.trimmed();
-        runArgs_ = splitArgs(pythonArgs_);
+        runProgram_ = config_.pythonPath.trimmed().isEmpty() ? defaultPython : config_.pythonPath.trimmed();
+        runArgs_ = CompilationUtils::splitArgs(config_.pythonArgs);
         runArgs_ << sourcePath;
         emit compilationSucceeded();
         startExecution();
@@ -271,8 +262,8 @@ void ExecutionController::startCompilation() {
     }
 
     if (language == "Java") {
-        runProgram_ = javaRunPath_.trimmed().isEmpty() ? "java" : javaRunPath_.trimmed();
-        runArgs_ = splitArgs(javaArgs_);
+        runProgram_ = config_.javaRunPath.trimmed().isEmpty() ? "java" : config_.javaRunPath.trimmed();
+        runArgs_ = CompilationUtils::splitArgs(config_.javaArgs);
         runArgs_ << "-cp" << tempPath << sourceBaseName;
     } else {
         runProgram_ = outputPath;
@@ -287,12 +278,12 @@ void ExecutionController::startCompilation() {
     compilerProcess_->setWorkingDirectory(tempPath);
     if (language == "Java") {
         const QString javacPath =
-            javaCompilerPath_.trimmed().isEmpty() ? "javac" : javaCompilerPath_.trimmed();
+            config_.javaCompilerPath.trimmed().isEmpty() ? "javac" : config_.javaCompilerPath.trimmed();
         compilerProcess_->start(javacPath, {sourcePath});
     } else {
         const QString compilerPath =
-            cppCompilerPath_.trimmed().isEmpty() ? "g++" : cppCompilerPath_.trimmed();
-        QStringList compileArgs = splitArgs(cppCompilerFlags_);
+            config_.cppCompilerPath.trimmed().isEmpty() ? "g++" : config_.cppCompilerPath.trimmed();
+        QStringList compileArgs = CompilationUtils::splitArgs(config_.cppCompilerFlags);
         compileArgs << sourcePath << "-o" << outputPath;
         compilerProcess_->start(compilerPath, compileArgs);
     }
@@ -469,7 +460,7 @@ void ExecutionController::onRunFinished(int exitCode, QProcess::ExitStatus statu
         resultStatus = "Runtime Error";
     } else {
         const QString expected = ui_.expectedEditor ? ui_.expectedEditor->toPlainText() : QString();
-        if (normalizeText(stdOut) == normalizeText(expected)) {
+        if (CompilationUtils::normalizeText(stdOut) == CompilationUtils::normalizeText(expected)) {
             resultStatus = "Accepted";
         } else {
             resultStatus = "Wrong Answer";
@@ -532,19 +523,19 @@ void ExecutionController::updateStatus(const QString &status) {
 
         if (status == "Accepted") {
             display = "AC";
-            color = "#2e7d32";
+            color = statusAcColor_.name();
         } else if (status == "Compile Error") {
             display = "CE";
-            color = "#c42b1c";
+            color = statusErrorColor_.name();
         } else if (status == "Runtime Error") {
             display = "RE";
-            color = "#c42b1c";
+            color = statusErrorColor_.name();
         } else if (status == "Time Limit Exceeded") {
             display = "TLE";
-            color = "#c42b1c";
+            color = statusErrorColor_.name();
         } else if (status == "Wrong Answer") {
             display = "WA";
-            color = "#c42b1c";
+            color = statusErrorColor_.name();
         }
 
         if (lastExecutionTimeMs_ >= 0 &&
@@ -598,38 +589,4 @@ void ExecutionController::updateOutputPanels(bool showOutput, bool showError) {
     }
 }
 
-QString ExecutionController::applyTransclusion(const QString &solution) const {
-    if (!transcludeTemplate_) {
-        return solution;
-    }
-    // Replace //#main with the solution code
-    QString result = template_;
-    
-    // Find //#main and replace with solution
-    // Support both "//#main" on its own line and inline
-    int index = result.indexOf("//#main");
-    if (index != -1) {
-        result.replace("//#main", solution);
-    } else {
-        // If no //#main marker, just use the solution as-is
-        result = solution;
-    }
-    
-    return result;
-}
 
-QString ExecutionController::normalizeText(const QString &text) const {
-    QString normalized = text;
-    normalized.replace("\r\n", "\n");
-    normalized.replace("\r", "\n");
-    QStringList lines = normalized.split('\n');
-    while (!lines.isEmpty() && lines.last().trimmed().isEmpty()) {
-        lines.removeLast();
-    }
-    for (QString &line : lines) {
-        while (line.endsWith(' ') || line.endsWith('\t')) {
-            line.chop(1);
-        }
-    }
-    return lines.join('\n');
-}

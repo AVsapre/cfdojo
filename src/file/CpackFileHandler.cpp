@@ -154,6 +154,28 @@ bool CpackFileHandler::save(const QString &path) const {
     QDataStream stream(&file);
     stream.setByteOrder(QDataStream::LittleEndian);
 
+    // Helper: write raw bytes and check for errors
+    auto writeBytes = [&](const QByteArray &bytes) -> bool {
+        if (bytes.isEmpty()) return true;
+        const qint64 written = file.write(bytes);
+        if (written != bytes.size()) {
+            errorString_ = file.errorString().isEmpty()
+                ? "Short write — disk may be full"
+                : file.errorString();
+            return false;
+        }
+        return true;
+    };
+    
+    // Helper: check QDataStream status
+    auto streamOk = [&]() -> bool {
+        if (stream.status() != QDataStream::Ok) {
+            errorString_ = "Write error — disk may be full";
+            return false;
+        }
+        return true;
+    };
+
     // Track offsets for central directory (name, offset, content)
     struct FileEntry {
         QString name;
@@ -183,9 +205,10 @@ bool CpackFileHandler::save(const QString &path) const {
         stream << quint32(manifestBytes.size());
         stream << quint16(nameBytes.size());
         stream << quint16(0);  // extra field length
+        if (!streamOk()) return false;
 
-        file.write(nameBytes);
-        file.write(manifestBytes);
+        if (!writeBytes(nameBytes)) return false;
+        if (!writeBytes(manifestBytes)) return false;
     }
 
     // Write local file headers and data
@@ -209,12 +232,13 @@ bool CpackFileHandler::save(const QString &path) const {
         stream << quint32(content.size());  // uncompressed size
         stream << quint16(nameBytes.size());
         stream << quint16(0);  // extra field length
+        if (!streamOk()) return false;
 
         // File name
-        file.write(nameBytes);
+        if (!writeBytes(nameBytes)) return false;
 
         // File data (uncompressed)
-        file.write(content);
+        if (!writeBytes(content)) return false;
     }
 
     // Central directory
@@ -241,8 +265,9 @@ bool CpackFileHandler::save(const QString &path) const {
         stream << quint16(0);  // internal attributes
         stream << quint32(0);  // external attributes
         stream << entry.offset;
+        if (!streamOk()) return false;
 
-        file.write(nameBytes);
+        if (!writeBytes(nameBytes)) return false;
     }
 
     const quint32 centralDirSize = static_cast<quint32>(file.pos()) - centralDirOffset;
@@ -257,9 +282,10 @@ bool CpackFileHandler::save(const QString &path) const {
     stream << centralDirSize;
     stream << centralDirOffset;
     stream << quint16(0);  // comment length
+    if (!streamOk()) return false;
 
     file.close();
-    return true;
+    return file.error() == QFileDevice::NoError;
 }
 
 bool CpackFileHandler::load(const QString &path) {
@@ -276,6 +302,10 @@ bool CpackFileHandler::load(const QString &path) {
     while (!file.atEnd()) {
         quint32 signature;
         stream >> signature;
+        if (stream.status() != QDataStream::Ok) {
+            errorString_ = "Truncated or corrupt archive (failed to read signature)";
+            return false;
+        }
 
         if (signature == kLocalFileSignature) {
             quint16 versionNeeded, flags, compression, modTime, modDate;
@@ -286,8 +316,22 @@ bool CpackFileHandler::load(const QString &path) {
             stream >> modTime >> modDate;
             stream >> crc >> compressedSize >> uncompressedSize;
             stream >> fileNameLength >> extraFieldLength;
+            if (stream.status() != QDataStream::Ok) {
+                errorString_ = "Truncated archive (incomplete local file header)";
+                return false;
+            }
+
+            // Sanity check sizes to prevent huge allocations from corrupt data
+            if (compressedSize > 256 * 1024 * 1024 || fileNameLength > 4096) {
+                errorString_ = "Archive entry too large or corrupt";
+                return false;
+            }
 
             QByteArray fileName = file.read(fileNameLength);
+            if (fileName.size() != fileNameLength) {
+                errorString_ = "Truncated archive (incomplete filename)";
+                return false;
+            }
             file.skip(extraFieldLength);
 
             if (compression != kCompressionStore) {
@@ -296,6 +340,20 @@ bool CpackFileHandler::load(const QString &path) {
             }
 
             QByteArray content = file.read(compressedSize);
+            if (static_cast<quint32>(content.size()) != compressedSize) {
+                errorString_ = "Truncated archive (incomplete file data)";
+                return false;
+            }
+            
+            // Validate CRC-32
+            const quint32 actualCrc = calculateCrc32(content);
+            if (actualCrc != crc) {
+                errorString_ = QString("CRC-32 mismatch for '%1' (expected 0x%2, got 0x%3)")
+                    .arg(QString::fromUtf8(fileName))
+                    .arg(crc, 8, 16, QChar('0'))
+                    .arg(actualCrc, 8, 16, QChar('0'));
+                return false;
+            }
             
             // Sanitize filename to prevent path traversal attacks
             QString safeName = sanitizeFilename(QString::fromUtf8(fileName));
@@ -319,6 +377,10 @@ bool CpackFileHandler::load(const QString &path) {
             stream >> crc >> compressedSize >> uncompressedSize;
             stream >> fileNameLength >> extraFieldLength >> commentLength;
             stream >> diskStart >> internalAttr >> externalAttr >> localOffset;
+            if (stream.status() != QDataStream::Ok) {
+                errorString_ = "Truncated archive (incomplete central directory)";
+                return false;
+            }
 
             file.skip(fileNameLength + extraFieldLength + commentLength);
 
