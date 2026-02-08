@@ -59,8 +59,7 @@ jobs:
           else
             # Generate a minimal 256x256 placeholder icon
             sudo apt-get install -y imagemagick
-            convert -size 256x256 xc:'#2979ff' -gravity center \
-              -pointsize 72 -fill white -annotate 0 'CF' placeholder_icon.png
+            convert -size 256x256 xc:'#2979ff' placeholder_icon.png
             ICON=placeholder_icon.png
           fi
           mkdir -p AppDir/usr/share/icons/hicolor/256x256/apps
@@ -119,7 +118,7 @@ jobs:
             CreateShortCut "`$SMPROGRAMS\CFDojo.lnk" "`$INSTDIR\CFDojo.exe"
           SectionEnd
           "@ | Out-File -Encoding ASCII installer.nsi
-          makensis installer.nsi
+          & "C:\Program Files (x86)\NSIS\makensis.exe" installer.nsi
 
       - name: Upload Windows EXE
         if: matrix.os == 'windows-latest'
