@@ -517,7 +517,8 @@ QMenuBar QPushButton#MenuCopyButton,
 QMenuBar QPushButton#MenuRunAllButton {
     background-color: transparent;
     border: none;
-    padding: 2px;
+    padding: 0px;
+    margin: 0px;
 }
 
 QMenuBar QPushButton#MenuCopyButton:hover,

@@ -52,6 +52,7 @@
 #include <QSizePolicy>
 #include <QStackedWidget>
 #include <QStyle>
+#include <QStyleOption>
 #include <QTimer>
 #include <QVBoxLayout>
 #include <QStringList>
@@ -295,6 +296,13 @@ MainWindow::MainWindow(QWidget *parent)
 }
 
 MainWindow::~MainWindow() {
+    // Disconnect the settings dialog before child widgets are torn down,
+    // otherwise its destroyed() signal can fire while sibling widgets
+    // (e.g. settingsButton_) are already partially destroyed → segfault.
+    if (settingsWindow_) {
+        settingsWindow_->disconnect(this);
+    }
+
     // Ensure any in-flight stress test future finishes before members are
     // destroyed.  Without this, QtConcurrent may dereference a dangling
     // pointer to this MainWindow.
