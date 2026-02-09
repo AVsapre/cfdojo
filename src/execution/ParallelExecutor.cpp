@@ -41,6 +41,8 @@ ParallelExecutor::ParallelExecutor(QObject *parent)
 
 ParallelExecutor::~ParallelExecutor() {
     cancel();
+    compileFuture_.waitForFinished();
+    if (watcher_) watcher_->waitForFinished();
 }
 
 void ParallelExecutor::setSourceCode(const QString &code) {
@@ -65,7 +67,7 @@ void ParallelExecutor::runAll(const std::vector<TestInput> &tests) {
 
     // Run compilation on a background thread to avoid blocking the GUI
     std::vector<TestInput> testsCopy = tests;
-    auto compileFuture = QtConcurrent::run([this, testsCopy]() {
+    compileFuture_ = QtConcurrent::run([this, testsCopy]() {
         if (!compile()) {
             running_ = false;
             return;
@@ -250,7 +252,7 @@ TestResult ParallelExecutor::runSingleTest(const TestInput &test,
     result.error = QString::fromUtf8(process.readAllStandardError());
     
     // Check if output matches expected
-    if (result.exitCode == 0 && result.error.isEmpty()) {
+    if (result.exitCode == 0) {
         result.passed = (CompilationUtils::normalizeText(result.output) == CompilationUtils::normalizeText(test.expectedOutput));
     }
     

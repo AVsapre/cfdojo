@@ -8,6 +8,7 @@
 #include <QProcess>
 #include <QTemporaryDir>
 #include <QStringList>
+#include <atomic>
 #include <memory>
 #include <vector>
 
@@ -77,10 +78,11 @@ private:
     QString executablePath_;
     QString runProgram_;
     QStringList runArgs_;
-    bool running_ = false;
-    bool cancelled_ = false;
+    std::atomic<bool> running_{false};
+    std::atomic<bool> cancelled_{false};
 
     QFutureWatcher<TestResult> *watcher_ = nullptr;
+    QFuture<void> compileFuture_;
     std::vector<TestResult> results_;
     int expectedResults_ = 0;
 };

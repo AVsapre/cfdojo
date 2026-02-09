@@ -438,9 +438,8 @@ void SettingsDialog::onMultithreadingToggled(bool checked) {
     }
 
     QSettings settings("CF Dojo", "CF Dojo");
-    const bool warned = settings.value("multithreadingWarningShown", false).toBool();
     const bool suppressed = settings.value("multithreadingWarningSuppressed", false).toBool();
-    if (warned || suppressed) {
+    if (suppressed) {
         return;
     }
 
@@ -465,8 +464,6 @@ void SettingsDialog::onMultithreadingToggled(bool checked) {
         multithreadingCheckbox_->setChecked(false);
         return;
     }
-
-    settings.setValue("multithreadingWarningShown", true);
 }
 
 bool SettingsDialog::eventFilter(QObject *obj, QEvent *event) {

@@ -146,8 +146,13 @@ void CompanionListener::onReadyRead() {
     }
     
     // Parse the request — only use exactly contentLength bytes
-    parseRequest(socket, buffer.mid(0, bodyStart + contentLength));
+    parseRequest(buffer.mid(0, bodyStart + contentLength));
     
+    // Stop the connection timeout — request was handled successfully
+    if (auto *timer = socket->findChild<QTimer*>()) {
+        timer->stop();
+    }
+
     // Send HTTP response
     QByteArray response = "HTTP/1.1 200 OK\r\n"
                           "Content-Type: text/plain\r\n"
@@ -168,7 +173,7 @@ void CompanionListener::onDisconnected() {
     }
 }
 
-void CompanionListener::parseRequest(QTcpSocket *socket, const QByteArray &data) {
+void CompanionListener::parseRequest(const QByteArray &data) {
     // Find body start (after \r\n\r\n)
     int headerEnd = data.indexOf("\r\n\r\n");
     if (headerEnd == -1) {

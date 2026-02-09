@@ -50,7 +50,7 @@ private slots:
     void onDisconnected();
 
 private:
-    void parseRequest(QTcpSocket *socket, const QByteArray &data);
+    void parseRequest(const QByteArray &data);
     
     QTcpServer *server_ = nullptr;
     quint16 activePort_ = 0;

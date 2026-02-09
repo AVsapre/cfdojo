@@ -109,9 +109,7 @@ private:
                                      const QString &solution,
                                      const QString &brute,
                                      const QString &generator,
-                                     const QString &tmpl,
-                                     const QString &compilerPath,
-                                     const QString &compilerFlags,
+                                     const CompilationConfig &config,
                                      int timeoutMs,
                                      bool parallel) const;
     void updateTestSummary(const QString &text);

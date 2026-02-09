@@ -63,6 +63,7 @@
 #include <QtConcurrent>
 #include <algorithm>
 #include <cmath>
+#include <optional>
 
 namespace {
 constexpr int kActivityBarWidth = 50;
@@ -991,7 +992,8 @@ void MainWindow::setupMenuBar() {
         if (!target && codeEditor_) {
             target = codeEditor_;
         }
-        if (target) {
+        if (target && target->metaObject()->indexOfSlot(
+                QMetaObject::normalizedSignature(QByteArray(slot) + "()")) != -1) {
             QMetaObject::invokeMethod(target, slot, Qt::DirectConnection);
         }
     };
@@ -2135,7 +2137,7 @@ void MainWindow::runStressTest() {
         }
         if (stressLog_) {
             stressLog_->setPlainText(
-                "Please provide solution.cpp, brute.cpp, and generator.cpp before running stress test.");
+                "Please provide solution, brute, and generator code before running stress test.");
         }
         return;
     }
@@ -2233,14 +2235,14 @@ void MainWindow::runStressTest() {
     const QString solutionCopy = solution;
     const QString bruteCopy = brute;
     const QString generatorCopy = generator;
-    const QString tmplCopy = tmpl;
-    const QString compilerPathCopy = compilationConfig_.cppCompilerPath;
-    const QString compilerFlagsCopy = compilationConfig_.cppCompilerFlags;
+    CompilationConfig configCopy = compilationConfig_;
+    configCopy.templateCode = tmpl;
+    configCopy.transcludeTemplate = transcludeTemplateEnabled_;
 
     const bool useParallel = multithreadingEnabled_;
-    stressWatcher_->setFuture(QtConcurrent::run([this, count, solutionCopy, bruteCopy, generatorCopy, tmplCopy, compilerPathCopy, compilerFlagsCopy, timeoutMs, useParallel]() {
-        return runStressTestWorker(count, solutionCopy, bruteCopy, generatorCopy, tmplCopy,
-                                   compilerPathCopy, compilerFlagsCopy, timeoutMs, useParallel);
+    stressWatcher_->setFuture(QtConcurrent::run([this, count, solutionCopy, bruteCopy, generatorCopy, configCopy, timeoutMs, useParallel]() {
+        return runStressTestWorker(count, solutionCopy, bruteCopy, generatorCopy, configCopy,
+                                   timeoutMs, useParallel);
     }));
 }
 
@@ -2248,9 +2250,7 @@ MainWindow::StressResult MainWindow::runStressTestWorker(int count,
                                                         const QString &solution,
                                                         const QString &brute,
                                                         const QString &generator,
-                                                        const QString &tmpl,
-                                                        const QString &compilerPath,
-                                                        const QString &compilerFlags,
+                                                        const CompilationConfig &config,
                                                         int timeoutMs,
                                                         bool parallel) const {
     StressResult result;
@@ -2268,86 +2268,150 @@ MainWindow::StressResult MainWindow::runStressTestWorker(int count,
         return result;
     }
 
+    const QString tempPath = tempDir.path();
+    const QString language = CompilationUtils::normalizeLanguage(config.language);
+
 #ifdef Q_OS_WIN
     const QString exeSuffix = ".exe";
 #else
     const QString exeSuffix;
 #endif
 
-    auto applyTransclusion = [](const QString &templateText, const QString &solutionText) {
-        if (templateText.contains("//#main")) {
-            QString replaced = templateText;
-            return replaced.replace("//#main", solutionText);
-        }
-        return solutionText;
+    // ── Per-source preparation ──────────────────────────────────────────
+    // For each of the 3 sources (generator, brute, solution) we need:
+    //   runProgram  – the executable / interpreter path
+    //   runArgs     – arguments to pass before piping stdin
+    // C++:    compile → run the native binary
+    // Python: no compile → run via interpreter
+    // Java:   compile with javac → run via java -cp
+
+    struct SourceBinary {
+        QString program;
+        QStringList args;
     };
 
-    auto compileSource = [&](const QString &code,
-                             const QString &sourceName,
-                             const QString &exeName,
-                             QString *errorOut) -> bool {
-        const QString tempPath = tempDir.path();
-        const QString sourcePath = QDir(tempPath).filePath(sourceName);
+    auto prepareSource = [&](const QString &rawCode,
+                             const QString &label,
+                             const QString &baseName,
+                             QString *errorOut) -> std::optional<SourceBinary> {
+        const QString code = CompilationUtils::applyTransclusion(
+            config.templateCode, rawCode, config.transcludeTemplate);
+
+        const QString sourceExt = language == "Python" ? "py"
+                                : language == "Java"   ? "java"
+                                                       : "cpp";
+
+        // Each source gets its own subdirectory to avoid name collisions
+        // (e.g. Java files with the same public class name).
+        const QString sourceDir = QDir(tempPath).filePath(baseName);
+        QDir().mkpath(sourceDir);
+
+        // For Java, detect the public class name from the *transcluded* code
+        const QString sourceBaseName =
+            language == "Java" ? CompilationUtils::detectJavaMainClass(code) : baseName;
+        const QString sourcePath =
+            QDir(sourceDir).filePath(QString("%1.%2").arg(sourceBaseName, sourceExt));
+
+        // Write the source file
         QFile file(sourcePath);
         if (!file.open(QIODevice::WriteOnly | QIODevice::Text)) {
-            if (errorOut) {
-                *errorOut = QString("Failed to write %1").arg(sourceName);
-            }
-            return false;
+            if (errorOut) *errorOut = QString("Failed to write %1 source").arg(label);
+            return std::nullopt;
         }
         QTextStream out(&file);
         out.setEncoding(QStringConverter::Utf8);
         out << code;
         file.close();
 
-        QStringList args = QProcess::splitCommand(compilerFlags.trimmed());
-        if (args.isEmpty()) {
-            args << "-O2" << "-std=c++17";
-        }
-        args << sourceName << "-o" << exeName;
+        SourceBinary bin;
 
+        if (language == "Python") {
+            // No compilation needed — run through interpreter
+#ifdef Q_OS_WIN
+            const QString defaultPython = "python";
+#else
+            const QString defaultPython = "python3";
+#endif
+            bin.program = config.pythonPath.trimmed().isEmpty()
+                ? defaultPython : config.pythonPath.trimmed();
+            bin.args = CompilationUtils::splitArgs(config.pythonArgs);
+            bin.args << sourcePath;
+            return bin;
+        }
+
+        if (language == "Java") {
+            // Compile with javac
+            const QString javacPath = config.javaCompilerPath.trimmed().isEmpty()
+                ? "javac" : config.javaCompilerPath.trimmed();
+            QProcess compiler;
+            compiler.setWorkingDirectory(sourceDir);
+            compiler.start(javacPath, {sourcePath});
+            if (!compiler.waitForFinished(30000)) {
+                if (errorOut) *errorOut = QString("%1 compilation timed out").arg(label);
+                return std::nullopt;
+            }
+            if (compiler.exitCode() != 0) {
+                const QString err = QString::fromUtf8(compiler.readAllStandardError());
+                if (errorOut) *errorOut = err.isEmpty()
+                    ? QString("%1 compilation failed").arg(label) : err;
+                return std::nullopt;
+            }
+            bin.program = config.javaRunPath.trimmed().isEmpty()
+                ? "java" : config.javaRunPath.trimmed();
+            bin.args = CompilationUtils::splitArgs(config.javaArgs);
+            bin.args << "-cp" << sourceDir << sourceBaseName;
+            return bin;
+        }
+
+        // C++ — compile to native binary
+        const QString exePath = QDir(sourceDir).filePath(baseName + exeSuffix);
+        QStringList compileArgs = CompilationUtils::splitArgs(config.cppCompilerFlags);
+        if (compileArgs.isEmpty()) {
+            compileArgs << "-O2" << "-std=c++17";
+        }
+        compileArgs << sourcePath << "-o" << exePath;
+
+        const QString compilerPath = config.cppCompilerPath.trimmed().isEmpty()
+            ? "g++" : config.cppCompilerPath.trimmed();
         QProcess compiler;
         compiler.setWorkingDirectory(tempPath);
-        compiler.start(compilerPath.trimmed().isEmpty() ? "g++" : compilerPath.trimmed(), args);
+        compiler.start(compilerPath, compileArgs);
         if (!compiler.waitForFinished(30000)) {
-            if (errorOut) {
-                *errorOut = QString("Compilation timed out for %1").arg(sourceName);
-            }
-            return false;
+            if (errorOut) *errorOut = QString("%1 compilation timed out").arg(label);
+            return std::nullopt;
         }
         if (compiler.exitCode() != 0) {
             const QString err = QString::fromUtf8(compiler.readAllStandardError());
-            if (errorOut) {
-                *errorOut = err.isEmpty()
-                    ? QString("Compilation failed for %1").arg(sourceName)
-                    : err;
-            }
-            return false;
+            if (errorOut) *errorOut = err.isEmpty()
+                ? QString("%1 compilation failed").arg(label) : err;
+            return std::nullopt;
         }
-        return true;
+        bin.program = exePath;
+        return bin;
     };
 
-    const QString generatorCode = applyTransclusion(tmpl, generator);
-    const QString bruteCode = applyTransclusion(tmpl, brute);
-    const QString solutionCode = applyTransclusion(tmpl, solution);
-    QString compileError;
-    if (!compileSource(generatorCode, "generator.cpp", "generator" + exeSuffix, &compileError)) {
-        result.error = QString("Generator compile error:\n%1").arg(compileError);
+    // Prepare all three sources
+    QString prepError;
+    auto generatorBin = prepareSource(generator, "Generator", "generator", &prepError);
+    if (!generatorBin) {
+        result.error = QString("Generator error:\n%1").arg(prepError);
         result.complexity = QString("Suspected: insufficient timing data");
         return result;
     }
-    if (!compileSource(bruteCode, "brute.cpp", "brute" + exeSuffix, &compileError)) {
-        result.error = QString("Brute compile error:\n%1").arg(compileError);
+    auto bruteBin = prepareSource(brute, "Brute", "brute", &prepError);
+    if (!bruteBin) {
+        result.error = QString("Brute error:\n%1").arg(prepError);
         result.complexity = QString("Suspected: insufficient timing data");
         return result;
     }
-    if (!compileSource(solutionCode, "solution.cpp", "solution" + exeSuffix, &compileError)) {
-        result.error = QString("Solution compile error:\n%1").arg(compileError);
+    auto solutionBin = prepareSource(solution, "Solution", "solution", &prepError);
+    if (!solutionBin) {
+        result.error = QString("Solution error:\n%1").arg(prepError);
         result.complexity = QString("Suspected: insufficient timing data");
         return result;
     }
 
-    auto runProcess = [&](const QString &exePath,
+    auto runProcess = [&](const SourceBinary &bin,
                           const QString &input,
                           const QString &workingDir,
                           QString *stdoutOut,
@@ -2358,10 +2422,10 @@ MainWindow::StressResult MainWindow::runStressTestWorker(int count,
         process.setWorkingDirectory(workingDir);
         QElapsedTimer timer;
         timer.start();
-        process.start(exePath);
+        process.start(bin.program, bin.args);
         if (!process.waitForStarted(1000)) {
             if (errorOut) {
-                *errorOut = QString("Failed to start %1").arg(exePath);
+                *errorOut = QString("Failed to start %1").arg(bin.program);
             }
             return false;
         }
@@ -2374,7 +2438,7 @@ MainWindow::StressResult MainWindow::runStressTestWorker(int count,
             process.kill();
             process.waitForFinished(1000);
             if (errorOut) {
-                *errorOut = QString("Time Limit Exceeded: %1").arg(exePath);
+                *errorOut = QString("Time Limit Exceeded: %1").arg(bin.program);
             }
             return false;
         }
@@ -2392,17 +2456,12 @@ MainWindow::StressResult MainWindow::runStressTestWorker(int count,
 
         if (process.exitStatus() != QProcess::NormalExit || process.exitCode() != 0) {
             if (errorOut) {
-                *errorOut = QString("Runtime Error: %1").arg(exePath);
+                *errorOut = QString("Runtime Error: %1").arg(bin.program);
             }
             return false;
         }
         return true;
     };
-
-    const QString tempPath = tempDir.path();
-    const QString generatorExe = QDir(tempPath).filePath("generator" + exeSuffix);
-    const QString bruteExe = QDir(tempPath).filePath("brute" + exeSuffix);
-    const QString solutionExe = QDir(tempPath).filePath("solution" + exeSuffix);
 
     std::vector<QString> inputs;
     std::vector<QString> caseDirs;
@@ -2416,7 +2475,7 @@ MainWindow::StressResult MainWindow::runStressTestWorker(int count,
         QString input;
         QString stderrOut;
         QString runError;
-        if (!runProcess(generatorExe, QString(), caseDir, &input, &stderrOut, nullptr, &runError)) {
+        if (!runProcess(*generatorBin, QString(), caseDir, &input, &stderrOut, nullptr, &runError)) {
             result.error = QString("Generator failed on test #%1:\n%2")
                 .arg(i + 1)
                 .arg(runError);
@@ -2440,7 +2499,7 @@ MainWindow::StressResult MainWindow::runStressTestWorker(int count,
 
             QString bruteOut;
             QString bruteErr;
-            if (!runProcess(bruteExe, input, caseDir, &bruteOut, &bruteErr, nullptr, &runError)) {
+            if (!runProcess(*bruteBin, input, caseDir, &bruteOut, &bruteErr, nullptr, &runError)) {
                 result.error = QString("Brute failed on test #%1:\n%2")
                     .arg(i + 1)
                     .arg(runError);
@@ -2454,7 +2513,7 @@ MainWindow::StressResult MainWindow::runStressTestWorker(int count,
             QString solutionOut;
             QString solutionErr;
             qint64 solutionTime = -1;
-            if (!runProcess(solutionExe, input, caseDir, &solutionOut, &solutionErr, &solutionTime, &runError)) {
+            if (!runProcess(*solutionBin, input, caseDir, &solutionOut, &solutionErr, &solutionTime, &runError)) {
                 result.error = QString("Solution failed on test #%1:\n%2")
                     .arg(i + 1)
                     .arg(runError);
@@ -2514,7 +2573,7 @@ MainWindow::StressResult MainWindow::runStressTestWorker(int count,
             QString runError;
             QString bruteOut;
             QString bruteErr;
-            if (!runProcess(bruteExe, input, caseDir, &bruteOut, &bruteErr, nullptr, &runError)) {
+            if (!runProcess(*bruteBin, input, caseDir, &bruteOut, &bruteErr, nullptr, &runError)) {
                 caseResult.error = QString("Brute failed on test #%1:\n%2")
                     .arg(index + 1)
                     .arg(runError);
@@ -2525,7 +2584,7 @@ MainWindow::StressResult MainWindow::runStressTestWorker(int count,
             QString solutionOut;
             QString solutionErr;
             qint64 solutionTime = -1;
-            if (!runProcess(solutionExe, input, caseDir, &solutionOut, &solutionErr, &solutionTime, &runError)) {
+            if (!runProcess(*solutionBin, input, caseDir, &solutionOut, &solutionErr, &solutionTime, &runError)) {
                 caseResult.error = QString("Solution failed on test #%1:\n%2")
                     .arg(index + 1)
                     .arg(runError);
@@ -2701,8 +2760,12 @@ void MainWindow::applyParallelResult(const TestResult &result) {
     }
 
     if (widgets.outputViewer) {
-        widgets.outputViewer->setPlainText(result.output);
-        widgets.outputViewer->parentWidget()->show();
+        if (!result.output.isEmpty()) {
+            widgets.outputViewer->setPlainText(result.output);
+            widgets.outputViewer->parentWidget()->show();
+        } else {
+            widgets.outputViewer->parentWidget()->hide();
+        }
     }
 
     if (widgets.errorViewer) {
@@ -2712,6 +2775,13 @@ void MainWindow::applyParallelResult(const TestResult &result) {
         } else {
             widgets.errorViewer->parentWidget()->hide();
         }
+    }
+
+    if (widgets.outputSplitter) {
+        const bool anyVisible =
+            (widgets.outputViewer && widgets.outputViewer->parentWidget()->isVisible()) ||
+            (widgets.errorViewer && widgets.errorViewer->parentWidget()->isVisible());
+        widgets.outputSplitter->setVisible(anyVisible);
     }
 
         if (widgets.statusLabel) {
@@ -3127,6 +3197,7 @@ void MainWindow::onProblemReceived(const QJsonObject &problem) {
             setDirty(false);
             raise();
             activateWindow();
+            QApplication::alert(this);
             return;
         }
     }
@@ -3215,4 +3286,5 @@ void MainWindow::onProblemReceived(const QJsonObject &problem) {
     // Bring window to front
     raise();
     activateWindow();
+    QApplication::alert(this);
 }
