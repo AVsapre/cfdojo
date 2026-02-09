@@ -29,7 +29,9 @@ protected:
 int main(int argc, char *argv[]) {
     // Ignore SIGPIPE so writing to a closed socket/pipe (e.g. Competitive
     // Companion disconnect, QProcess exit) doesn't crash the app.
+#ifndef _WIN32
     std::signal(SIGPIPE, SIG_IGN);
+#endif
 
     QApplication app(argc, argv);
     app.setOrganizationName("CF Dojo");
