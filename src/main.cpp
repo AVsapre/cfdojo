@@ -4,6 +4,8 @@
 #include "app/MainWindow.h"
 #include "Version.h"
 
+#include <csignal>
+
 namespace {
 /// Event filter that sets tabStopDistance to 4 spaces on every
 /// QPlainTextEdit whenever it is shown or its font changes.
@@ -25,6 +27,10 @@ protected:
 } // namespace
 
 int main(int argc, char *argv[]) {
+    // Ignore SIGPIPE so writing to a closed socket/pipe (e.g. Competitive
+    // Companion disconnect, QProcess exit) doesn't crash the app.
+    std::signal(SIGPIPE, SIG_IGN);
+
     QApplication app(argc, argv);
     app.setOrganizationName("CF Dojo");
     app.setApplicationName("CF Dojo");

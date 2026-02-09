@@ -19,6 +19,9 @@
 #include <QTimer>
 #include <Qsci/qsciscintilla.h>
 #include <csignal>
+#ifdef Q_OS_UNIX
+#include <unistd.h>
+#endif
 
 ExecutionController::ExecutionController(QObject *parent)
     : QObject(parent),
