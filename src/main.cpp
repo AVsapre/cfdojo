@@ -35,6 +35,13 @@ int main(int argc, char *argv[]) {
 #endif
 
     QApplication app(argc, argv);
+
+    // Disable mnemonic underlines on buttons/labels.
+    // Some Linux desktop themes show them by default, which causes
+    // unwanted underline artifacts under icon-only buttons.
+    extern void qt_set_sequence_auto_mnemonic(bool);
+    qt_set_sequence_auto_mnemonic(false);
+
     app.setOrganizationName("CF Dojo");
     app.setApplicationName("CF Dojo");
     app.setApplicationVersion(CFDojo::kVersion);
