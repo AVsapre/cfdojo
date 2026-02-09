@@ -1,5 +1,6 @@
 #include <QApplication>
 #include <QFontMetricsF>
+#include <QIcon>
 #include <QPlainTextEdit>
 #include "app/MainWindow.h"
 #include "Version.h"
@@ -37,6 +38,7 @@ int main(int argc, char *argv[]) {
     app.setOrganizationName("CF Dojo");
     app.setApplicationName("CF Dojo");
     app.setApplicationVersion(CFDojo::kVersion);
+    app.setWindowIcon(QIcon(":/images/logo.svg"));
 
     auto *tabFilter = new TabStopFilter(&app);
     app.installEventFilter(tabFilter);

@@ -1265,9 +1265,8 @@ void MainWindow::openAboutDialog() {
         "<li>Load testing - Happy Girl - <a href=\"https://thenounproject.com/icon/load-testing-6394477/\">source</a></li>"
         "<li>Copy - Kosong Tujuh - <a href=\"https://thenounproject.com/icon/copy-5457986/\">source</a></li>"
         "<li>File - Damar Creative - <a href=\"https://thenounproject.com/icon/8251834/\">source</a></li>"
-        "<li>Target - Radhika Studio - <a href=\"https://thenounproject.com/icon/8090227/\">source</a></li>"
         "<li>Settings - Alzam - <a href=\"https://thenounproject.com/icon/5079171/\">source</a></li>"
-        "<li>Battle - Zach Bogart - <a href=\"https://thenounproject.com/icon/5248405/\">source</a></li>"
+        "<li>Attack (app icon) - Good Wife - <a href=\"https://thenounproject.com/icon/attack-5572740/\">source</a></li>"
         "</ul>");
     scrollLayout->addWidget(aboutText);
     scrollLayout->addStretch();

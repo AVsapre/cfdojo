@@ -16,5 +16,6 @@
         <file alias="images/window-minimize.svg">images/window-minimize.svg</file>
         <file alias="images/window-maximize.svg">images/window-maximize.svg</file>
         <file alias="images/window-close.svg">images/window-close.svg</file>
+        <file alias="images/logo.svg">images/logo.svg</file>
     </qresource>
 </RCC>
