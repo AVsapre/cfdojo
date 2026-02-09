@@ -516,21 +516,20 @@ QToolButton#qt_menubar_ext_button {
 QMenuBar QPushButton#MenuCopyButton,
 QMenuBar QPushButton#MenuRunAllButton {
     background-color: transparent;
-    border: 1px solid transparent;
-    border-bottom: 1px solid @edgecolor@;
+    border: none;
     padding: 2px;
 }
 
 QMenuBar QPushButton#MenuCopyButton:hover,
 QMenuBar QPushButton#MenuRunAllButton:hover {
     background-color: @edgecolor@;
-    border-bottom: 1px solid @edgecolor@;
+    border: none;
 }
 
 QMenuBar QPushButton#MenuCopyButton:pressed,
 QMenuBar QPushButton#MenuRunAllButton:pressed {
     background-color: @edgecolor@;
-    border-bottom: 1px solid @edgecolor@;
+    border: none;
 }
 
 QWidget#CopyToast {
