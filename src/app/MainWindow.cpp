@@ -432,7 +432,24 @@ void MainWindow::setupUi() {
 
     setupMenuBar();
     setupMainEditor();
-    setCentralWidget(mainSplitter_);
+
+    // Activity bar sits outside the splitter in a fixed-width column,
+    // so collapsing the side panel never affects it.
+    auto *centralWidget = new QWidget(this);
+    auto *centralLayout = new QHBoxLayout(centralWidget);
+    centralLayout->setContentsMargins(0, 0, 0, 0);
+    centralLayout->setSpacing(0);
+
+    // 1px separator between activity bar and content area
+    activityBarEdge_ = new QWidget(centralWidget);
+    activityBarEdge_->setObjectName("ActivityBarEdge");
+    activityBarEdge_->setFixedWidth(1);
+    activityBarEdge_->setAttribute(Qt::WA_StyledBackground, true);
+
+    centralLayout->addWidget(activityBar_);
+    centralLayout->addWidget(activityBarEdge_);
+    centralLayout->addWidget(mainSplitter_, 1);
+    setCentralWidget(centralWidget);
 }
 
 void MainWindow::setupActivityBar() {
@@ -895,14 +912,13 @@ void MainWindow::setupMainEditor() {
     // Setup activity bar
     setupActivityBar();
 
-    // Create the collapsible splitter
+    // Create the collapsible splitter (side panel + editor only)
     mainSplitter_ = new CollapsibleSplitter(Qt::Horizontal);
     mainSplitter_->setObjectName("MainSplitter");
-    mainSplitter_->setCollapsibleIndex(1);
+    mainSplitter_->setCollapsibleIndex(0);
     mainSplitter_->setMinimumPanelWidth(kSidePanelMinWidth);
     mainSplitter_->setPreferredWidth(kSidePanelDefaultWidth);
 
-    mainSplitter_->addWidget(activityBar_);
     mainSplitter_->addWidget(sidePanel_);
     auto *editorWrapper = new QWidget(this);
     auto *editorLayout = new QVBoxLayout(editorWrapper);
@@ -913,15 +929,13 @@ void MainWindow::setupMainEditor() {
     mainSplitter_->addWidget(editorWrapper);
 
     // Configure splitter behavior
-    mainSplitter_->setCollapsible(0, false);  // Activity bar never collapses
-    mainSplitter_->setCollapsible(1, true);   // Side panel can collapse
-    mainSplitter_->setCollapsible(2, false);  // Editor never collapses
+    mainSplitter_->setCollapsible(0, true);   // Side panel can collapse
+    mainSplitter_->setCollapsible(1, false);  // Editor never collapses
 
-    mainSplitter_->setStretchFactor(0, 0);    // Activity bar fixed
-    mainSplitter_->setStretchFactor(1, 0);    // Side panel doesn't stretch
-    mainSplitter_->setStretchFactor(2, 1);    // Editor takes remaining space
+    mainSplitter_->setStretchFactor(0, 0);    // Side panel doesn't stretch
+    mainSplitter_->setStretchFactor(1, 1);    // Editor takes remaining space
 
-    mainSplitter_->setSizes({kActivityBarWidth, kSidePanelDefaultWidth, 1});
+    mainSplitter_->setSizes({kSidePanelDefaultWidth, 1});
 
     // Connect collapse state to toggle button
     connect(mainSplitter_, &CollapsibleSplitter::collapsedChanged,
@@ -1848,6 +1862,11 @@ void MainWindow::setEditorMode(EditorMode mode) {
 void MainWindow::onSidePanelCollapsedChanged(bool collapsed) {
     if (sidebarToggle_) {
         sidebarToggle_->setChecked(!collapsed);
+    }
+    // Show/hide the physical separator between activity bar and content.
+    // When collapsed the activity bar blends seamlessly into the editor.
+    if (activityBarEdge_) {
+        activityBarEdge_->setVisible(!collapsed);
     }
     updateActivityBarActiveStates(collapsed);
 }

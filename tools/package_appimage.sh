@@ -39,7 +39,7 @@ EOF
 
 # Try to copy an icon if present in repo (common locations)
 ICON_SRC=""
-for p in "$ROOT_DIR/src/images/icon.png" "$ROOT_DIR/src/images/cfdojo.png" "$ROOT_DIR/resource.png"; do
+for p in "$ROOT_DIR/src/images/icon.png" "$ROOT_DIR/src/images/cfdojo.png" "$ROOT_DIR/resource.png" "$ROOT_DIR/src/images/logo.svg"; do
   if [ -f "$p" ]; then
     ICON_SRC="$p"
     break
@@ -48,7 +48,16 @@ done
 
 if [ -n "$ICON_SRC" ]; then
   mkdir -p "$APPDIR/usr/share/icons/hicolor/256x256/apps"
-  cp "$ICON_SRC" "$APPDIR/usr/share/icons/hicolor/256x256/apps/cfdojo.png"
+  if [[ "$ICON_SRC" == *.svg ]]; then
+    # Convert SVG to PNG if needed
+    if command -v convert >/dev/null 2>&1; then
+      convert -background none "$ICON_SRC" -resize 256x256 "$APPDIR/usr/share/icons/hicolor/256x256/apps/cfdojo.png"
+    else
+      echo "Warning: SVG icon found but 'convert' (ImageMagick) not installed. Skipping icon." >&2
+    fi
+  else
+    cp "$ICON_SRC" "$APPDIR/usr/share/icons/hicolor/256x256/apps/cfdojo.png"
+  fi
 fi
 
 # Locate linuxdeployqt

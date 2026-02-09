@@ -108,17 +108,30 @@ QWidget#FileExplorer,
 QWidget#StressTestPanel,
 QWidget#CpackPanel {
     background-color: @background@;
-    border-right: none;
+    border: none;
     padding-top: 6px;
 }
 
+QStackedWidget#SidePanelStack {
+    background-color: @background@;
+    border: none;
+}
+
 QScrollArea#CasesScroll {
-    background: transparent;
+    background: @background@;
+    border: none;
+    padding: 0px;
+    margin: 0px;
+}
+
+QScrollArea#CasesScroll > QWidget > QWidget {
+    background: @background@;
     border: none;
 }
 
 QScrollArea#CasesScroll::viewport {
-    background: transparent;
+    background: @background@;
+    border: none;
 }
 
 QWidget#CasesContainer {

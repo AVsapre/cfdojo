@@ -164,6 +164,7 @@ private:
 
     // Activity bar
     QWidget *activityBar_ = nullptr;
+    QWidget *activityBarEdge_ = nullptr;
     ActivityBarButton *sidebarToggle_ = nullptr;
     ActivityBarButton *stressTestButton_ = nullptr;
     ActivityBarButton *templateButton_ = nullptr;
