@@ -1,0 +1,144 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"          # triggers on v1.0.0, v2.3.1-beta, etc.
+
+permissions:
+  contents: write     # needed to create releases and upload assets
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-22.04
+            host: linux
+            artifact: CFDojo-Linux.AppImage
+          - os: macos-latest
+            host: mac
+            artifact: CFDojo-macOS.dmg
+          - os: windows-latest
+            host: windows
+            artifact: CFDojo-Windows-Installer.exe
+
+    runs-on: ${{ matrix.os }}
+    name: Build ${{ matrix.os }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Qt
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: "6.5.2"
+          host: ${{ matrix.host }}
+          cache: true
+
+      - name: Configure CMake
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build
+        run: cmake --build build --config Release
+
+      # ── Linux: AppImage ────────────────────────────────────────────
+      - name: Install Linux packaging deps
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y patchelf libglu1-mesa-dev imagemagick
+
+      - name: Create AppDir & build AppImage
+        if: runner.os == 'Linux'
+        run: |
+          BIN=$(find build -maxdepth 2 -name CFDojo -type f | head -n1)
+          if [ -z "$BIN" ]; then echo "Binary not found"; exit 1; fi
+
+          mkdir -p AppDir/usr/bin
+          cp "$BIN" AppDir/usr/bin/
+
+          printf '[Desktop Entry]\nName=CFDojo\nExec=CFDojo\nIcon=CFDojo\nType=Application\nCategories=Development;\n' \
+            > AppDir/CFDojo.desktop
+
+          # Generate a placeholder icon (no raster icons in repo)
+          convert -size 256x256 xc:'#2979ff' AppDir/CFDojo.png
+          mkdir -p AppDir/usr/share/icons/hicolor/256x256/apps
+          cp AppDir/CFDojo.png AppDir/usr/share/icons/hicolor/256x256/apps/CFDojo.png
+
+          curl -L -o linuxdeployqt.AppImage \
+            https://github.com/probonopd/linuxdeployqt/releases/download/continuous/linuxdeployqt-continuous-x86_64.AppImage
+          chmod +x linuxdeployqt.AppImage
+          ./linuxdeployqt.AppImage AppDir/usr/bin/CFDojo -appimage
+
+          # Rename to predictable artifact name
+          mv *.AppImage "${{ matrix.artifact }}"
+
+      # ── macOS: DMG ─────────────────────────────────────────────────
+      - name: Package macOS DMG
+        if: runner.os == 'macOS'
+        run: |
+          APP=$(find build -maxdepth 2 -name '*.app' -type d | head -n1)
+          if [ -z "$APP" ]; then echo ".app bundle not found"; exit 1; fi
+          "${QT_ROOT_DIR}/bin/macdeployqt" "$APP"
+          hdiutil create -volname CFDojo -srcfolder "$APP" -ov -format UDZO "${{ matrix.artifact }}"
+
+      # ── Windows: EXE installer via NSIS ────────────────────────────
+      - name: Package Windows installer
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $bin = Get-ChildItem -Path build -Recurse -Filter CFDojo.exe -ErrorAction SilentlyContinue |
+                 Select-Object -First 1
+          if (-not $bin) { Write-Error "Binary not found"; exit 1 }
+
+          # Bundle Qt DLLs/plugins next to binary
+          & "${env:QT_ROOT_DIR}\bin\windeployqt.exe" $bin.FullName
+
+          choco install nsis -y
+          New-Item -ItemType Directory -Force -Path installer_files | Out-Null
+          Copy-Item -Path (Join-Path $bin.DirectoryName '*') -Destination installer_files -Recurse
+
+          @"
+          OutFile "${{ matrix.artifact }}"
+          InstallDir "`$PROGRAMFILES\CFDojo"
+          !include "MUI2.nsh"
+          Name "CFDojo"
+          Section "Install"
+            SetOutPath "`$INSTDIR"
+            File /r "installer_files\*"
+            CreateShortCut "`$SMPROGRAMS\CFDojo.lnk" "`$INSTDIR\CFDojo.exe"
+          SectionEnd
+          "@ | Out-File -Encoding ASCII installer.nsi
+
+          & "C:\Program Files (x86)\NSIS\makensis.exe" installer.nsi
+
+      # ── Upload artifact for the release job ────────────────────────
+      - name: Upload packaged artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: ${{ matrix.artifact }}
+
+  # ── Create GitHub Release and attach all artifacts ──────────────────
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    name: Publish GitHub Release
+
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: assets
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: |
+            assets/CFDojo-Linux.AppImage/CFDojo-Linux.AppImage
+            assets/CFDojo-macOS.dmg/CFDojo-macOS.dmg
+            assets/CFDojo-Windows-Installer.exe/CFDojo-Windows-Installer.exe
