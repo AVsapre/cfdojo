@@ -96,6 +96,8 @@ StressPanelBuilder::Widgets StressPanelBuilder::build(QWidget *parent,
     auto *log = new QPlainTextEdit(panel);
     log->setObjectName("StressLog");
     log->setReadOnly(true);
+    log->setTextInteractionFlags(Qt::NoTextInteraction);
+    log->setFocusPolicy(Qt::NoFocus);
     log->setLineWrapMode(QPlainTextEdit::NoWrap);
     layout->addWidget(log);
 

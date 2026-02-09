@@ -12,13 +12,6 @@ QWidget {
     font-size: 14px;
 }
 
-/* EDITOR FILE TAB */
-QLabel#EditorFileLabel {
-    color: @textcolor@;
-    font-size: 13px;
-    padding: 0px 4px;
-}
-
 /* ACTIVITY BAR */
 QWidget#ActivityBar {
     background-color: @background@;
@@ -115,7 +108,7 @@ QWidget#FileExplorer,
 QWidget#StressTestPanel,
 QWidget#CpackPanel {
     background-color: @background@;
-    border-right: 1px solid @edgecolor@;
+    border-right: none;
     padding-top: 6px;
 }
 
@@ -277,8 +270,10 @@ QsciScintilla {
     background-color: @background@;
     border: 0px;
 }
-QPlainTextEdit#StressLog {
-    border-left: none;
+QPlainTextEdit#StressLog,
+QPlainTextEdit#StressLog:focus {
+    border: none;
+    border-top: 1px solid @edgecolor@;
 }
 
 /* BUTTONS */

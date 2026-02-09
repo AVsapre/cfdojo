@@ -103,7 +103,7 @@ QString ThemeManager::generateZoomOverrides(double scale) const {
     return QString(
         "\n/* Zoom overrides */\n"
         "QWidget { font-size: %1px; }\n"
-        "QLabel#EditorFileLabel { font-size: %2px; }\n"
+        "QLabel#EditorFileLabel { } /* unused %2 */\n"
         "QWidget#DockContent QLabel { font-size: %3px; }\n"
         "QWidget#DockContent QPushButton { font-size: %4px; padding: %5px %6px; }\n"
         "QTextEdit, QPlainTextEdit { font-size: %7px; }\n"

@@ -194,7 +194,6 @@ private:
     QTreeView *fileTree_ = nullptr;
     QFileSystemModel *fileModel_ = nullptr;
     QsciScintilla *codeEditor_ = nullptr;
-    QLabel *editorFileLabel_ = nullptr;
     TestPanelBuilder::PanelWidgets testPanelWidgets_;
     std::vector<TestPanelBuilder::CaseWidgets> caseWidgets_;
 
@@ -222,7 +221,7 @@ private:
     QString currentFilePath_;
     EditorMode editorMode_ = EditorMode::Solution;
     QString currentSolutionCode_;
-    QString baseWindowTitle_ = "CF Dojo - v1.0";
+    QString baseWindowTitle_ = "CF Dojo";
 
     // Active problem state
     QString currentBruteCode_;

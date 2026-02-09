@@ -427,7 +427,7 @@ MainWindow::DirtyScope::~DirtyScope() {
 
 void MainWindow::setupUi() {
     resize(1200, 800);
-    baseWindowTitle_ = QString("CF Dojo - %1").arg(CFDojo::versionString());
+    baseWindowTitle_ = QStringLiteral("CF Dojo");
     updateWindowTitle();
 
     setupMenuBar();
@@ -571,12 +571,6 @@ void MainWindow::setupActivityBar() {
     layout->addWidget(bottomPanel, 0, Qt::AlignBottom);
 
     barLayout->addWidget(buttonColumn);
-
-    auto *edgeLine = new QWidget(activityBar_);
-    edgeLine->setObjectName("ActivityBarEdge");
-    edgeLine->setFixedWidth(1);
-    edgeLine->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Expanding);
-    barLayout->addWidget(edgeLine);
 }
 
 void MainWindow::openSettingsDialog() {
@@ -1022,11 +1016,6 @@ void MainWindow::setupMenuBar() {
     auto *cornerLayout = new QHBoxLayout(menuCorner);
     cornerLayout->setContentsMargins(0, 0, 8, 0);
     cornerLayout->setSpacing(6);
-
-    editorFileLabel_ = new QLabel("solution.cpp", menuCorner);
-    editorFileLabel_->setObjectName("EditorFileLabel");
-    cornerLayout->addWidget(editorFileLabel_);
-    cornerLayout->addSpacing(8);
 
     auto *runAllButton = new QPushButton(menuCorner);
     runAllButton->setObjectName("MenuRunAllButton");
@@ -1507,9 +1496,6 @@ void MainWindow::updateWindowTitle() {
         modeLabel = "testcases.json";
         break;
     }
-    if (editorFileLabel_) {
-        editorFileLabel_->setText(modeLabel);
-    }
     QString editLabel;
     if (hasSavedFile_ && !currentFilePath_.isEmpty()) {
         editLabel = QFileInfo(currentFilePath_).completeBaseName();
@@ -1517,7 +1503,8 @@ void MainWindow::updateWindowTitle() {
         editLabel = "Untitled";
     }
     const QString dirtyPrefix = isDirty_ ? "* " : "";
-    setWindowTitle(QString("%1%2 - %3").arg(dirtyPrefix, editLabel, baseWindowTitle_));
+    setWindowTitle(QString("%1%2 \u2013 %3 \u2014 %4")
+                       .arg(dirtyPrefix, modeLabel, editLabel, baseWindowTitle_));
 }
 
 QString MainWindow::autosaveDir() const {
@@ -1692,7 +1679,7 @@ void MainWindow::loadCpackFromHandler(const CpackFileHandler &handler,
     if (!loadedTitle.isEmpty()) {
         baseWindowTitle_ = QString("CF Dojo - %1").arg(loadedTitle);
     } else {
-        baseWindowTitle_ = QString("CF Dojo - %1").arg(CFDojo::versionString());
+        baseWindowTitle_ = QStringLiteral("CF Dojo");
     }
     updateProblemMetaUi();
 
