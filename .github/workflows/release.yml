@@ -73,6 +73,9 @@ jobs:
           chmod +x linuxdeployqt.AppImage
           ./linuxdeployqt.AppImage AppDir/usr/bin/CFDojo -appimage
 
+          # Remove the tool so only the app AppImage remains
+          rm -f linuxdeployqt.AppImage
+
           # Rename to predictable artifact name
           mv *.AppImage "${{ matrix.artifact }}"
 
